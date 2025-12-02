@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>RAG Chat - DeepSeek V3.1 free model</title>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 800px; margin: 40px auto; padding: 20px; background: #f4f4f9; }
+    .chat { border: 1px solid #ddd; border-radius: 12px; padding: 16px; background: white; min-height: 400px; margin-bottom: 20px; overflow-y: auto; }
+    .message { margin: 12px 0; padding: 12px; border-radius: 12px; max-width: 85%; word-wrap: break-word; }
+    .user { background: #007bff; color: white; align-self: flex-end; margin-left: auto; }
+    .bot { background: #e9ecef; color: #333; }
+    .sources { font-size: 0.8em; color: #666; margin-top: 8px; }
+    form { display: flex; gap: 8px; }
+    input { flex: 1; padding: 12px; border: 1px solid #ddd; border-radius: 8px; font-size: 1em; }
+    button { padding: 12px 20px; background: #007bff; color: white; border: none; border-radius: 8px; cursor: pointer; }
+    button:hover { background: #0056b3; }
+    .typing { color: #666; font-style: italic; }
+  </style>
+</head>
+<body>
+  <h1>RAG Chat with DeepSeek V3</h1>
+  <div class="chat" id="chat">
+    <div class="message bot">Ask me anything about the scraped site!</div>
+  </div>
+  <form id="form">
+    <input type="text" id="query" placeholder="e.g. toll roads in China" required autocomplete="off">
+    <button type="submit">Send</button>
+  </form>
+
+  <script>
+    const form = document.getElementById('form');
+    const chat = document.getElementById('chat');
+    const queryInput = document.getElementById('query');
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const query = queryInput.value.trim();
+      if (!query) return;
+
+      // User message
+      const userMsg = document.createElement('div');
+      userMsg.className = 'message user';
+      userMsg.textContent = query;
+      chat.appendChild(userMsg);
+
+      // Typing indicator
+      const typing = document.createElement('div');
+      typing.className = 'message bot typing';
+      typing.textContent = 'Thinking...';
+      chat.appendChild(typing);
+      chat.scrollTop = chat.scrollHeight;
+
+      queryInput.value = '';
+
+      try {
+        const response = await fetch('/ask', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({ query })
+        });
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let botMsg = document.createElement('div');
+        botMsg.className = 'message bot';
+        typing.remove();
+        chat.appendChild(botMsg);
+
+        let fullText = '';
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          const chunk = decoder.decode(value);
+          fullText += chunk;
+          botMsg.textContent = fullText;
+          chat.scrollTop = chat.scrollHeight;
+        }
+
+        // Add sources
+        if (fullText.includes('Sources:')) {
+          const parts = fullText.split('Sources:');
+          botMsg.innerHTML = parts[0] + '<div class="sources"><strong>Sources:</strong><br>' + 
+            parts[1].trim().replace(/\\n/g, '<br>') + '</div>';
+        }
+
+      } catch (err) {
+        botMsg.textContent = 'Error: ' + err.message;
+      }
+    });
+  </script>
+</body>
+</html>

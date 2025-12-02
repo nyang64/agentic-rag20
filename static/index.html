@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Agentic RAG 2.0 - Web Search</title>
+  <style>
+    /* Existing styles... */
+    
+    .thinking-step {
+      background: #f0f8ff;
+      border-left: 3px solid #007bff;
+      padding: 10px;
+      margin: 10px 0;
+      font-size: 0.9em;
+      font-family: monospace;
+    }
+    
+    .tool-use {
+      color: #28a745;
+      font-weight: bold;
+    }
+    
+    .source-card {
+      background: #fff;
+      border: 1px solid #ddd;
+      border-radius: 8px;
+      padding: 12px;
+      margin: 8px 0;
+    }
+    
+    .source-card a {
+      color: #007bff;
+      text-decoration: none;
+      font-weight: bold;
+    }
+    
+    .source-card .snippet {
+      color: #666;
+      font-size: 0.9em;
+      margin-top: 5px;
+    }
+  </style>
+</head>
+<body>
+  <h1>🤖 Agentic RAG 2.0 - Web-Powered AI</h1>
+  <p style="color: #666;">Ask anything - I'll search the web and provide current information!</p>
+  
+  <div class="chat" id="chat">
+    <div class="message bot">
+      Hi! I'm an AI agent with web search capabilities. I can:
+      <ul>
+        <li>🌐 Search the web for current information</li>
+        <li>📄 Fetch and analyze specific webpages</li>
+        <li>💾 Search local knowledge base (if available)</li>
+        <li>🔗 Cite sources with links</li>
+      </ul>
+      Try asking about recent events, current facts, or specific topics!
+    </div>
+  </div>
+  
+  <form id="form">
+    <input type="text" id="query" 
+           placeholder="e.g., What are the latest developments in AI?" 
+           required autocomplete="off">
+    <button type="submit">Ask</button>
+  </form>
+  
+  <div style="margin-top: 20px; text-align: center; color: #999; font-size: 0.9em;">
+    <label>
+      <input type="checkbox" id="showThinking" checked>
+      Show agent reasoning process
+    </label>
+  </div>
+
+  <script>
+    const form = document.getElementById('form');
+    const chat = document.getElementById('chat');
+    const queryInput = document.getElementById('query');
+    const showThinking = document.getElementById('showThinking');
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const query = queryInput.value.trim();
+      if (!query) return;
+
+      // User message
+      const userMsg = document.createElement('div');
+      userMsg.className = 'message user';
+      userMsg.textContent = query;
+      chat.appendChild(userMsg);
+
+      // Bot response container
+      const botMsg = document.createElement('div');
+      botMsg.className = 'message bot';
+      chat.appendChild(botMsg);
+      
+      // Thinking container
+      const thinkingDiv = document.createElement('div');
+      thinkingDiv.className = 'thinking-step';
+      thinkingDiv.textContent = '🤔 Analyzing query...';
+      if (showThinking.checked) {
+        botMsg.appendChild(thinkingDiv);
+      }
+      
+      chat.scrollTop = chat.scrollHeight;
+      queryInput.value = '';
+
+      try {
+        const response = await fetch('/ask', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({ query })
+        });
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let fullText = '';
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          
+          const chunk = decoder.decode(value);
+          fullText += chunk;
+          
+          // Parse and display with formatting
+          botMsg.innerHTML = formatResponse(fullText, showThinking.checked);
+          chat.scrollTop = chat.scrollHeight;
+        }
+
+      } catch (err) {
+        botMsg.textContent = 'Error: ' + err.message;
+      }
+    });
+    
+    function formatResponse(text, showSteps) {
+      // Parse thinking steps vs final answer
+      // Format sources nicely
+      // (Implementation depends on response format)
+      return text.replace(/Sources:/g, '<br><br>✅<strong>Sources:</strong>');
+    }
+  </script>
+</body>
+</html>

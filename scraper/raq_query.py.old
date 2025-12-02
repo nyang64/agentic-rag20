@@ -1,0 +1,90 @@
+# rag_query.py
+#import time
+#from openai import RateLimitError
+import os
+from dotenv import load_dotenv
+from langchain_openai import ChatOpenAI
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_postgres import PGVector
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.output_parsers import StrOutputParser
+from langchain_core.runnables import RunnablePassthrough
+from langchain_core.documents import Document
+
+load_dotenv()
+
+def invoke_with_retry(chain, query, max_retries=5):
+    import time
+    from openai import RateLimitError
+    retry = 0
+    while True:
+        try:
+            return chain.invoke(query)
+        except RateLimitError as e:
+            if retry >= max_retries:
+                raise
+            wait = 2 ** retry  # Exponential backoff
+            print(f"Rate limited. Retrying in {wait}s... ({retry+1}/{max_retries})")
+            time.sleep(wait)
+            retry += 1
+
+
+# 1. Embeddings model (same as scraper)
+embeddings = HuggingFaceEmbeddings(
+    model_name="sentence-transformers/all-MiniLM-L6-v2"
+)
+
+# 2. LLM via OpenRouter (DeepSeek V3)
+llm = ChatOpenAI(
+    model=os.getenv("DEEPSEEK_FREE_MODEL"),  # Replace with exact model ID if different
+    openai_api_key=os.getenv("OPENROUTER_API_KEY"),
+    openai_api_base="https://openrouter.ai/api/v1",
+    temperature=0.1,  # Low for factual RAG
+)
+
+# 3. Connect to PGVector (your scraper DB)
+CONNECTION_STRING = os.getenv("PGVECTOR_DB_URL", "postgresql://myuser:mypassword@localhost:5432/myprojdb")
+COLLECTION_NAME = "scraper.pages"  # Matches your table
+
+# Load vector store (assumes embeddings are pre-computed in DB)
+vectorstore = PGVector(
+    connection=CONNECTION_STRING,
+    embeddings=embeddings,
+    collection_name=COLLECTION_NAME,
+)
+
+# 4. Retriever (get top-k similar docs)
+retriever = vectorstore.as_retriever(search_type="similarity",
+                                    search_kwargs={"k": 3,
+                                                   "include_metadata": True 
+                                                  })  # Top 3 matches
+
+# 5. Prompt template for RAG
+prompt = ChatPromptTemplate.from_template(
+    """You are a helpful assistant. Use the following context to answer the question.
+
+Context: {context}
+
+Question: {question}
+
+Answer:"""
+)
+
+# 6. RAG chain
+def format_docs(docs):
+    return "\n\n".join(doc.page_content for doc in docs)
+
+rag_chain = (
+    {"context": retriever | format_docs, "question": RunnablePassthrough()}
+    | prompt
+    | llm
+    | StrOutputParser()
+)
+
+# 7. Run a query
+if __name__ == "__main__":
+    query = input("Ask a question about the scraped site (e.g., 'toll roads in China'): ")
+    response = invoke_with_retry(rag_chain, query)
+    print(f"\nResponse from DeepSeek V3 via OpenRouter:\n{response}")
+
+__all__ = ["rag_chain", "invoke_with_retry", "retriever"]

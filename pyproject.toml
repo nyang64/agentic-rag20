@@ -1,0 +1,139 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "scraper"
+version = "0.1.0"
+description = "My rag project with a spider scraper; use postgresql with pgvector extension to store embeddings"
+authors = [{ name="Nanchang Yang" }]
+requires-python = ">=3.12"
+dependencies = [
+    aiohappyeyeballs==2.6.1
+    aiohttp==3.13.2
+    aiosignal==1.4.0
+    annotated-doc==0.0.3
+    annotated-types==0.7.0
+    anyio==4.11.0
+    asyncpg==0.30.0
+    attrs==25.4.0
+    Automat==25.4.16
+    beautifulsoup4==4.14.2
+    certifi==2025.10.5
+    cffi==2.0.0
+    charset-normalizer==3.4.4
+    click==8.3.0
+    constantly==23.10.4
+    cryptography==46.0.3
+    cssselect==1.3.0
+    dataclasses-json==0.6.7
+    defusedxml==0.7.1
+    distro==1.9.0
+    fastapi==0.120.4
+    filelock==3.20.0
+    frozenlist==1.8.0
+    fsspec==2025.10.0
+    greenlet==3.2.4
+    h11==0.16.0
+    hf-xet==1.2.0
+    httpcore==1.0.9
+    httpx==0.28.1
+    httpx-sse==0.4.3
+    huggingface-hub==0.36.0
+    hyperlink==21.0.0
+    idna==3.11
+    incremental==24.7.2
+    itemadapter==0.12.2
+    itemloaders==1.3.2
+    Jinja2==3.1.6
+    jiter==0.11.1
+    jmespath==1.0.1
+    joblib==1.5.2
+    jsonpatch==1.33
+    jsonpointer==3.0.0
+    langchain==1.0.3
+    langchain-classic==1.0.0
+    langchain-core==1.0.2
+    langchain-huggingface==1.0.0
+    langchain-openai==1.0.1
+    langchain-postgres==0.0.16
+    langchain-text-splitters==1.0.0
+    langgraph==1.0.2
+    langgraph-checkpoint==3.0.0
+    langgraph-prebuilt==1.0.2
+    langgraph-sdk==0.2.9
+    langsmith==0.4.39
+    lxml==6.0.2
+    MarkupSafe==3.0.3
+    marshmallow==3.26.1
+    mpmath==1.3.0
+    multidict==6.7.0
+    mypy_extensions==1.1.0
+    networkx==3.5
+    numpy==1.26.4
+    openai==2.6.1
+    orjson==3.11.4
+    ormsgpack==1.11.0
+    packaging==25.0
+    parsel==1.10.0
+    pgvector==0.3.6
+    pillow==12.0.0
+    playwright==1.55.0
+    propcache==0.4.1
+    Protego==0.5.0
+    psycopg==3.2.12
+    psycopg-binary==3.2.12
+    psycopg-pool==3.2.7
+    psycopg2-binary==2.9.11
+    pyasn1==0.6.1
+    pyasn1_modules==0.4.2
+    pycparser==2.23
+    pydantic==2.12.3
+    pydantic-settings==2.11.0
+    pydantic_core==2.41.4
+    PyDispatcher==2.0.7
+    pyee==13.0.0
+    pyOpenSSL==25.3.0
+    python-dotenv==1.2.1
+    python-multipart==0.0.20
+    PyYAML==6.0.3
+    queuelib==1.8.0
+    regex==2025.10.23
+    requests==2.32.5
+    requests-file==3.0.1
+    requests-toolbelt==1.0.0
+    safetensors==0.6.2
+    scikit-learn==1.7.2
+    scipy==1.16.3
+    Scrapy==2.13.3
+    sentence-transformers==5.1.2
+    service-identity==24.2.0
+    setuptools==80.9.0
+    sniffio==1.3.1
+    soupsieve==2.8
+    SQLAlchemy==2.0.44
+    starlette==0.49.1
+    sympy==1.14.0
+    tenacity==9.1.2
+    threadpoolctl==3.6.0
+    tiktoken==0.12.0
+    tldextract==5.3.0
+    tokenizers==0.22.1
+    torch==2.2.2
+    tqdm==4.67.1
+    transformers==4.57.1
+    Twisted==25.5.0
+    typing-inspect==0.9.0
+    typing-inspection==0.4.2
+    typing_extensions==4.15.0
+    urllib3==2.5.0
+    uvicorn==0.38.0
+    w3lib==2.3.1
+    xxhash==3.6.0
+    yarl==1.22.0
+    zope.interface==8.0.1
+    zstandard==0.25.0
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
