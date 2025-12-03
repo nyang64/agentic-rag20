@@ -263,6 +263,9 @@ What are the latest developments in AI?
 What happened in the news today?
 Who won the recent elections?
 ```
+Below is a sample run screen shot, asking "what is the weather like in New York City today?"
+
+![Rag Web UI](static/img/Agentic-RAG-localRun.png)
 
 #### Weather & Real-time Data
 ```
