@@ -1,17 +1,22 @@
-# scraper/agent.py - Agentic RAG 2.0 using the new LangChain Agents API
+# scraper/agent.py - Agentic RAG 2.0 using langgraph.prebuilt.create_react_agent
 #
-# This implementation uses:
-# - langchain.agents.create_agent (high-level API)
-# - langgraph (low-level runtime, returns CompiledStateGraph)
+# NOTE: This implementation uses langgraph.prebuilt.create_react_agent which is
+# DEPRECATED as of LangGraph v1.0. The recommended approach is to use
+# langchain.agents.create_agent instead (see 'new-agent' branch).
 #
-# The create_agent function handles the ReAct loop internally using LangGraph.
+# This branch exists to demonstrate the langgraph.prebuilt API for educational
+# purposes and comparison.
 
 import os
 import re
+import warnings
 from typing import List, Dict, Any
 from dotenv import load_dotenv
 
-from langchain.agents import create_agent
+# Suppress the deprecation warning for demonstration purposes
+warnings.filterwarnings("ignore", message=".*create_react_agent has been moved.*")
+
+from langgraph.prebuilt import create_react_agent
 from langchain_openai import ChatOpenAI
 from langchain_core.tools import tool
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
@@ -206,14 +211,20 @@ SYSTEM_PROMPT = """You are an intelligent research assistant with access to mult
 
 
 # -------------------------------------------------------------------
-# Agent Creation using new langchain.agents.create_agent API
+# Agent Creation using langgraph.prebuilt.create_react_agent
 # -------------------------------------------------------------------
 
 def create_agentic_rag(checkpointer=None):
-    """Create an Agentic RAG 2.0 agent using the new LangChain Agents API.
+    """Create an Agentic RAG 2.0 agent using langgraph.prebuilt.create_react_agent.
 
-    This uses langchain.agents.create_agent which internally uses LangGraph
-    for the low-level runtime. The returned object is a CompiledStateGraph.
+    NOTE: This API is DEPRECATED as of LangGraph v1.0.
+    The recommended approach is: from langchain.agents import create_agent
+
+    This function uses the langgraph.prebuilt module directly, which provides
+    a pre-built ReAct agent implementation. The create_react_agent function:
+    - Creates a state graph with 'agent' and 'tools' nodes
+    - Implements the ReAct (Reasoning + Acting) loop
+    - Handles tool binding and execution automatically
 
     Args:
         checkpointer: Optional checkpointer for conversation persistence.
@@ -228,19 +239,19 @@ def create_agentic_rag(checkpointer=None):
         search_local_knowledge,
     ]
 
-    # Create agent using the new high-level API
-    # This returns a CompiledStateGraph (LangGraph runtime)
-    agent = create_agent(
+    # Create agent using langgraph.prebuilt.create_react_agent
+    # This is the low-level LangGraph prebuilt function
+    agent = create_react_agent(
         model=llm,
         tools=tools,
-        system_prompt=SYSTEM_PROMPT,
+        prompt=SYSTEM_PROMPT,
         checkpointer=checkpointer,
     )
 
     return agent
 
 
-# Global agent instance (without memory by default)
+# Global agent instance
 _agent = None
 
 
@@ -257,27 +268,23 @@ def query_agent(question: str, thread_id: str = None) -> Dict[str, Any]:
 
     Args:
         question: The user's question
-        thread_id: Optional thread ID for conversation memory (requires checkpointer)
+        thread_id: Optional thread ID for conversation memory
 
     Returns:
         Dict with "answer", "messages", and "tool_calls" keys
     """
     agent = get_agent()
 
-    # Build input in the format expected by the new agent API
     inputs = {
         "messages": [{"role": "user", "content": question}]
     }
 
-    # Add thread config if provided
     config = {}
     if thread_id:
         config = {"configurable": {"thread_id": thread_id}}
 
-    # Invoke the agent
     result = agent.invoke(inputs, config)
 
-    # Extract the final answer
     messages = result.get("messages", [])
     answer = ""
     tool_calls_made = []
@@ -287,10 +294,8 @@ def query_agent(question: str, thread_id: str = None) -> Dict[str, Any]:
             if hasattr(msg, "tool_calls") and msg.tool_calls:
                 tool_calls_made.extend(msg.tool_calls)
             else:
-                # This is likely the final answer
                 answer = msg.content
         elif isinstance(msg, ToolMessage):
-            # Tool response - track for debugging
             pass
 
     return {
@@ -305,10 +310,10 @@ def query_agent(question: str, thread_id: str = None) -> Dict[str, Any]:
 # -------------------------------------------------------------------
 
 class AgentExecutorWrapper:
-    """Wrapper that provides AgentExecutor-like interface for the new LangGraph agent.
+    """Wrapper that provides AgentExecutor-like interface for the LangGraph agent.
 
-    This allows the new agent to be used as a drop-in replacement in web_app.py
-    which expects the classic AgentExecutor interface.
+    This allows the LangGraph prebuilt agent to be used as a drop-in replacement
+    in web_app.py which expects the classic AgentExecutor interface.
     """
 
     def __init__(self, use_memory: bool = False):
@@ -329,21 +334,17 @@ class AgentExecutorWrapper:
         """
         query = inputs.get("input", "")
 
-        # Build input for new agent API
         agent_inputs = {
             "messages": [{"role": "user", "content": query}]
         }
 
-        # Handle config
         invoke_config = config or {}
         if self.use_memory and "configurable" not in invoke_config:
             self._thread_counter += 1
             invoke_config = {"configurable": {"thread_id": f"thread_{self._thread_counter}"}}
 
-        # Invoke the agent
         result = self.agent.invoke(agent_inputs, invoke_config)
 
-        # Extract output and intermediate steps
         messages = result.get("messages", [])
         output = ""
         intermediate_steps = []
@@ -351,7 +352,6 @@ class AgentExecutorWrapper:
         for msg in messages:
             if isinstance(msg, AIMessage):
                 if hasattr(msg, "tool_calls") and msg.tool_calls:
-                    # Track tool calls as intermediate steps
                     for tc in msg.tool_calls:
                         class Action:
                             def __init__(self, tool, tool_input):
@@ -359,13 +359,11 @@ class AgentExecutorWrapper:
                                 self.tool_input = tool_input
                         intermediate_steps.append((
                             Action(tc.get("name", ""), tc.get("args", {})),
-                            ""  # Observation filled by ToolMessage
+                            ""
                         ))
                 else:
-                    # Final answer
                     output = msg.content
             elif isinstance(msg, ToolMessage):
-                # Update last intermediate step with observation
                 if intermediate_steps:
                     action, _ = intermediate_steps[-1]
                     intermediate_steps[-1] = (action, msg.content)
@@ -388,7 +386,6 @@ class AgentExecutorWrapper:
             self._thread_counter += 1
             invoke_config = {"configurable": {"thread_id": f"thread_{self._thread_counter}"}}
 
-        # Stream events from the agent
         async for event in self.agent.astream_events(agent_inputs, invoke_config, version="v2"):
             kind = event.get("event", "")
 
@@ -433,27 +430,31 @@ def create_agentic_rag_executor(use_memory: bool = False) -> AgentExecutorWrappe
 
 def test_agent():
     """Test the agent with a simple query."""
-    print("Creating agent with langchain.agents.create_agent...")
+    print("=" * 60)
+    print("Testing langgraph.prebuilt.create_react_agent")
+    print("NOTE: This API is deprecated in favor of langchain.agents.create_agent")
+    print("=" * 60)
+
+    print("\nCreating agent...")
     agent = create_agentic_rag()
     print(f"Agent type: {type(agent)}")
 
-    print("\nTesting with weather query...")
+    print("\nTesting with simple query...")
     result = agent.invoke({
-        "messages": [{"role": "user", "content": "What is the weather like in New York today?"}]
+        "messages": [{"role": "user", "content": "What is 2+2?"}]
     })
 
-    # Get final answer
     messages = result.get("messages", [])
     print(f"\nTotal messages: {len(messages)}")
 
     for i, msg in enumerate(messages):
         print(f"\n[{i}] {type(msg).__name__}:")
         if hasattr(msg, "content"):
-            print(f"    Content: {msg.content[:200]}...")
+            content = msg.content[:200] if len(msg.content) > 200 else msg.content
+            print(f"    Content: {content}")
         if hasattr(msg, "tool_calls") and msg.tool_calls:
             print(f"    Tool calls: {[tc.get('name') for tc in msg.tool_calls]}")
 
-    # Get final answer
     final_answer = ""
     for msg in reversed(messages):
         if isinstance(msg, AIMessage) and not (hasattr(msg, "tool_calls") and msg.tool_calls):
@@ -469,7 +470,6 @@ def test_agent():
 
 
 if __name__ == "__main__":
-    print("Testing Agentic RAG 2.0 with new LangChain Agents API...")
     test_agent()
 
 

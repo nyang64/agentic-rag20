@@ -1,50 +1,74 @@
 # Agent Implementations Comparison
 
-This document explains the differences between the three agent implementations in this project:
+This document explains the differences between the agent implementations across different branches:
 
-- `scraper/agent_classic.py` - Legacy implementation using `langchain_classic`
-- `scraper/agent.py` - New implementation using `langchain.agents.create_agent`
-- `scraper/langgraph_agent.py` - Custom implementation using `langgraph.graph.StateGraph`
+| Branch | File | Library | Status |
+|--------|------|---------|--------|
+| `classic` | `agent_classic.py` | `langchain_classic` | Legacy, stable |
+| `new-agent` | `agent.py` | `langchain.agents` | **Recommended** |
+| `new-agent` | `langgraph_agent.py` | `langgraph.graph` | Custom workflows |
+| `prebuilt` | `agent.py` | `langgraph.prebuilt` | **Deprecated** |
 
 ---
 
 ## Table of Contents
 
 1. [Overview](#overview)
-2. [Library & Import Differences](#library--import-differences)
-3. [Architecture Comparison](#architecture-comparison)
-4. [Code Comparison](#code-comparison)
-5. [Key Differences Summary](#key-differences-summary)
-6. [When to Use Each](#when-to-use-each)
-7. [Evolution Path](#evolution-path)
-8. [Relationship Between agent.py and langgraph_agent.py](#relationship-between-agentpy-and-langgraph_agentpy)
+2. [Branch Summary](#branch-summary)
+3. [Library & Import Differences](#library--import-differences)
+4. [Architecture Comparison](#architecture-comparison)
+5. [Code Comparison](#code-comparison)
+6. [Key Differences Summary](#key-differences-summary)
+7. [When to Use Each](#when-to-use-each)
+8. [Evolution Path](#evolution-path)
+9. [Deprecation Notice](#deprecation-notice)
 
 ---
 
 ## Overview
 
-All three implementations achieve the same goal: an Agentic RAG system that can:
+All implementations achieve the same goal: an Agentic RAG system that can:
 - Search the web for current information
 - Fetch content from specific URLs
 - Search a local knowledge base (vector database)
 
-The difference lies in **how** they implement the agent loop and **what level of control** they provide.
+The difference lies in **which library/API** they use and **what level of control** they provide.
+
+---
+
+## Branch Summary
+
+### `classic` branch
+- Uses `langchain_classic.agents.AgentExecutor`
+- The original, proven implementation
+- Best for: Legacy compatibility, stability
+
+### `new-agent` branch (Recommended)
+- Uses `langchain.agents.create_agent` (high-level)
+- Also includes `langgraph_agent.py` for custom workflows
+- Best for: New projects, production use
+
+### `prebuilt` branch
+- Uses `langgraph.prebuilt.create_react_agent`
+- **DEPRECATED** as of LangGraph v1.0
+- Best for: Educational purposes, understanding LangGraph internals
 
 ---
 
 ## Library & Import Differences
 
-| File | Library | Key Import |
-|------|---------|------------|
-| `agent_classic.py` | `langchain_classic` (legacy) | `from langchain_classic.agents import AgentExecutor, create_tool_calling_agent` |
-| `agent.py` | `langchain` (new) | `from langchain.agents import create_agent` |
-| `langgraph_agent.py` | `langgraph` (low-level) | `from langgraph.graph import StateGraph, END` |
+| Branch | File | Library | Key Import |
+|--------|------|---------|------------|
+| `classic` | `agent_classic.py` | `langchain_classic` | `from langchain_classic.agents import AgentExecutor, create_tool_calling_agent` |
+| `new-agent` | `agent.py` | `langchain` | `from langchain.agents import create_agent` |
+| `new-agent` | `langgraph_agent.py` | `langgraph` | `from langgraph.graph import StateGraph, END` |
+| `prebuilt` | `agent.py` | `langgraph.prebuilt` | `from langgraph.prebuilt import create_react_agent` |
 
 ---
 
 ## Architecture Comparison
 
-### agent_classic.py - Legacy Architecture
+### agent_classic.py - Legacy Architecture (classic branch)
 
 ```
 ┌─────────────────────────────────────────────────────┐
@@ -79,7 +103,7 @@ Output: {"output": "answer", "intermediate_steps": [...]}
 
 ---
 
-### agent.py - New High-Level Architecture
+### agent.py - New High-Level Architecture (new-agent branch)
 
 ```
 ┌─────────────────────────────────────────────────────┐
@@ -112,7 +136,39 @@ Output: {"messages": [HumanMessage, AIMessage, ToolMessage, ...]}
 
 ---
 
-### langgraph_agent.py - Custom Low-Level Architecture
+### agent.py - Prebuilt Architecture (prebuilt branch) - DEPRECATED
+
+```
+┌─────────────────────────────────────────────────────┐
+│               langgraph.prebuilt                     │
+│        (DEPRECATED - moved to langchain.agents)      │
+├─────────────────────────────────────────────────────┤
+│                                                      │
+│   create_react_agent(                               │
+│       model=llm,                                    │
+│       tools=tools,                                  │
+│       prompt=SYSTEM_PROMPT,                         │
+│       checkpointer=checkpointer,                    │
+│   )                                                 │
+│              │                                       │
+│              ▼                                       │
+│   Returns: CompiledStateGraph                       │
+│                                                      │
+└─────────────────────────────────────────────────────┘
+
+Input:  {"messages": [{"role": "user", "content": "question"}]}
+Output: {"messages": [HumanMessage, AIMessage, ToolMessage, ...]}
+```
+
+**Characteristics:**
+- Uses `langgraph.prebuilt` package directly
+- **DEPRECATED** as of LangGraph v1.0
+- Same functionality as `langchain.agents.create_agent`
+- Exists for educational purposes and backward compatibility
+
+---
+
+### langgraph_agent.py - Custom Low-Level Architecture (new-agent branch)
 
 ```
 ┌─────────────────────────────────────────────────────┐
@@ -155,7 +211,7 @@ Output: {"messages": [...], "sources": [...], "iteration_count": N, ...}
 
 ### Creating the Agent
 
-**agent_classic.py:**
+**agent_classic.py (classic branch):**
 ```python
 from langchain_classic.agents import AgentExecutor, create_tool_calling_agent
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
@@ -178,7 +234,7 @@ agent_executor = AgentExecutor(
 )
 ```
 
-**agent.py:**
+**agent.py (new-agent branch) - RECOMMENDED:**
 ```python
 from langchain.agents import create_agent
 
@@ -190,7 +246,19 @@ agent = create_agent(
 )
 ```
 
-**langgraph_agent.py:**
+**agent.py (prebuilt branch) - DEPRECATED:**
+```python
+from langgraph.prebuilt import create_react_agent
+
+agent = create_react_agent(
+    model=llm,
+    tools=tools,
+    prompt=SYSTEM_PROMPT,
+    checkpointer=checkpointer,
+)
+```
+
+**langgraph_agent.py (new-agent branch):**
 ```python
 from langgraph.graph import StateGraph, END
 from typing import TypedDict, Annotated, Sequence
@@ -203,7 +271,6 @@ class CustomAgentState(TypedDict):
     tools_used: List[str]
 
 def should_continue(state):
-    # Custom routing logic
     if state["iteration_count"] > 10:
         return "end"
     if hasattr(state["messages"][-1], "tool_calls"):
@@ -211,12 +278,10 @@ def should_continue(state):
     return "end"
 
 def call_model(state):
-    # Call LLM with tools bound
     response = llm.bind_tools(tools).invoke(state["messages"])
     return {"messages": [response], "iteration_count": state["iteration_count"] + 1}
 
 def call_tool(state):
-    # Execute tools and return results
     # ... tool execution logic ...
     return {"messages": tool_messages, "sources": sources}
 
@@ -231,170 +296,104 @@ app = workflow.compile()
 
 ---
 
-### Invoking the Agent
-
-**agent_classic.py:**
-```python
-result = agent_executor.invoke({"input": "What is the weather in NYC?"})
-answer = result["output"]
-steps = result["intermediate_steps"]
-```
-
-**agent.py:**
-```python
-result = agent.invoke({
-    "messages": [{"role": "user", "content": "What is the weather in NYC?"}]
-})
-# Extract final answer from messages
-for msg in reversed(result["messages"]):
-    if isinstance(msg, AIMessage) and not msg.tool_calls:
-        answer = msg.content
-        break
-```
-
-**langgraph_agent.py:**
-```python
-result = workflow.invoke({
-    "messages": [HumanMessage(content="What is the weather in NYC?")],
-    "sources": [],
-    "iteration_count": 0,
-    "tools_used": [],
-})
-# Access custom state
-answer = result["messages"][-1].content
-sources = result["sources"]
-iterations = result["iteration_count"]
-tools_used = result["tools_used"]
-```
-
----
-
 ## Key Differences Summary
 
-| Feature | agent_classic.py | agent.py | langgraph_agent.py |
-|---------|-----------------|----------|-------------------|
-| **Package** | `langchain_classic` | `langchain` | `langgraph` |
-| **Abstraction Level** | Medium | High | Low |
-| **Returns** | `AgentExecutor` | `CompiledStateGraph` | `CompiledStateGraph` |
-| **Prompt Format** | `ChatPromptTemplate` with `MessagesPlaceholder` | Simple string | Manual `SystemMessage` |
-| **State** | Fixed (input/output) | Fixed (messages) | **Custom** (anything) |
-| **Memory** | Manual setup | `checkpointer` param | `checkpointer` param |
-| **Routing Logic** | Fixed ReAct loop | Fixed ReAct loop | **Custom** logic |
-| **Input format** | `{"input": "..."}` | `{"messages": [...]}` | Custom state dict |
-| **Output format** | `{"output": "...", "intermediate_steps": [...]}` | `{"messages": [...]}` | Custom state dict |
-| **Iteration Control** | `max_iterations` param | Internal | Custom in `should_continue` |
-| **Error Handling** | `handle_parsing_errors` param | Internal | Custom |
+| Feature | agent_classic.py | agent.py (new-agent) | agent.py (prebuilt) | langgraph_agent.py |
+|---------|-----------------|---------------------|--------------------|--------------------|
+| **Branch** | `classic` | `new-agent` | `prebuilt` | `new-agent` |
+| **Package** | `langchain_classic` | `langchain.agents` | `langgraph.prebuilt` | `langgraph.graph` |
+| **Status** | Legacy | **Recommended** | **Deprecated** | For custom needs |
+| **Abstraction** | Medium | High | High | Low |
+| **Returns** | `AgentExecutor` | `CompiledStateGraph` | `CompiledStateGraph` | `CompiledStateGraph` |
+| **State** | Fixed | Fixed | Fixed | **Custom** |
+| **Routing** | Fixed | Fixed | Fixed | **Custom** |
+| **Input** | `{"input": "..."}` | `{"messages": [...]}` | `{"messages": [...]}` | Custom dict |
 
 ---
 
 ## When to Use Each
 
-| Use Case | Recommended |
-|----------|-------------|
-| Legacy codebase, proven stability | `agent_classic.py` |
-| New projects, simple needs | `agent.py` |
-| Quick prototyping | `agent.py` |
-| Custom state tracking (sources, metadata) | `langgraph_agent.py` |
-| Human-in-the-loop workflows | `langgraph_agent.py` |
-| Multi-agent systems | `langgraph_agent.py` |
-| Custom routing logic | `langgraph_agent.py` |
-| Debugging/learning LangGraph internals | `langgraph_agent.py` |
+| Use Case | Recommended Branch |
+|----------|-------------------|
+| New projects | `new-agent` with `langchain.agents.create_agent` |
+| Legacy codebase compatibility | `classic` |
+| Custom state tracking | `new-agent` with `langgraph_agent.py` |
+| Human-in-the-loop workflows | `new-agent` with `langgraph_agent.py` |
+| Multi-agent systems | `new-agent` with `langgraph_agent.py` |
+| Learning LangGraph internals | `prebuilt` (educational only) |
 
 ---
 
 ## Evolution Path
 
 ```
-langchain_classic (legacy)     langchain (new)        langgraph (low-level)
-         │                          │                        │
-         ▼                          ▼                        ▼
-  AgentExecutor              create_agent()            StateGraph()
-  (monolithic)               (uses LangGraph           (full control)
-                              internally)
-         │                          │                        │
-         └──────────────────────────┴────────────────────────┘
-                                    │
-                                    ▼
-                         All return CompiledStateGraph
-                         (except classic returns AgentExecutor)
+                                    DEPRECATED
+                                        │
+langchain_classic        langgraph.prebuilt        langchain.agents
+(legacy)                 (v0.x)                    (v1.0+, recommended)
+     │                        │                          │
+     ▼                        ▼                          ▼
+AgentExecutor         create_react_agent ──────►  create_agent
+     │                        │                          │
+     │                        └──────────────────────────┤
+     │                                                   │
+     │                   langgraph.graph                 │
+     │                   (low-level)                     │
+     │                        │                          │
+     │                        ▼                          │
+     │                   StateGraph()                    │
+     │                   (full control)                  │
+     │                        │                          │
+     └────────────────────────┴──────────────────────────┘
+                              │
+                              ▼
+                    CompiledStateGraph
+                    (LangGraph runtime)
 ```
 
-The new `langchain.agents.create_agent` is essentially a high-level wrapper that builds a LangGraph workflow for you. If you need more control, you build the workflow yourself with `langgraph.graph.StateGraph`.
+**Migration path:**
+1. `langchain_classic.agents.AgentExecutor` → Legacy, still works
+2. `langgraph.prebuilt.create_react_agent` → **Deprecated**, migrate to #3
+3. `langchain.agents.create_agent` → **Recommended** for new code
+4. `langgraph.graph.StateGraph` → For custom workflows
 
 ---
 
-## Relationship Between agent.py and langgraph_agent.py
+## Deprecation Notice
 
-Both files use LangGraph as the runtime, but at different abstraction levels:
+### langgraph.prebuilt.create_react_agent
 
-### agent.py (High-Level)
+As of **LangGraph v1.0**, `create_react_agent` has been moved from `langgraph.prebuilt` to `langchain.agents` and renamed to `create_agent`.
 
-Uses `langchain.agents.create_agent` which:
-- Automatically creates the state graph
-- Automatically handles the ReAct loop
-- Automatically manages tool execution
-- Returns a ready-to-use `CompiledStateGraph`
+**Old (deprecated):**
+```python
+from langgraph.prebuilt import create_react_agent
+agent = create_react_agent(model=llm, tools=tools, prompt="...")
+```
 
+**New (recommended):**
 ```python
 from langchain.agents import create_agent
-
 agent = create_agent(model=llm, tools=tools, system_prompt="...")
-# That's it - the graph is built for you
 ```
 
-### langgraph_agent.py (Low-Level)
-
-Builds the state graph manually which:
-- Gives you control over state structure
-- Gives you control over node behavior
-- Gives you control over routing logic
-- Requires more code but offers more flexibility
-
-```python
-from langgraph.graph import StateGraph, END
-
-# You define everything yourself
-workflow = StateGraph(CustomAgentState)
-workflow.add_node("agent", call_model)
-workflow.add_node("tools", call_tool)
-workflow.add_conditional_edges("agent", should_continue, {...})
-workflow.add_edge("tools", "agent")
-app = workflow.compile()
-```
-
-### Visual Comparison
-
-```
-agent.py (high-level):
-┌─────────────────────────────────────┐
-│  create_agent(llm, tools)           │  ◄── One function call
-│  (everything handled internally)    │
-└─────────────────────────────────────┘
-
-langgraph_agent.py (low-level):
-┌─────────────────────────────────────┐
-│  [agent node] ──► should_continue?  │
-│       ▲              │              │
-│       │         yes  │  no          │
-│       │              ▼              │
-│       └──── [tools node]     [END]  │
-│                                     │
-│  (you control every piece)          │
-└─────────────────────────────────────┘
-```
-
-### When to Use Which?
-
-- **agent.py**: For most use cases. It's simpler and the LangGraph runtime handles everything.
-- **langgraph_agent.py**: When you need custom state, custom routing, human-in-the-loop, or multi-agent coordination.
+The `prebuilt` branch exists for educational purposes to demonstrate the original LangGraph prebuilt API.
 
 ---
 
-## File Locations
+## File Locations by Branch
 
-- `scraper/agent_classic.py` - Legacy implementation (classic branch)
-- `scraper/agent.py` - New high-level implementation (new-agent branch)
-- `scraper/langgraph_agent.py` - Custom low-level implementation (new-agent branch)
+### classic branch
+- `scraper/agent_classic.py` - Main agent implementation
+
+### new-agent branch
+- `scraper/agent.py` - Uses `langchain.agents.create_agent`
+- `scraper/langgraph_agent.py` - Custom `StateGraph` implementation
+
+### prebuilt branch
+- `scraper/agent.py` - Uses `langgraph.prebuilt.create_react_agent`
+
+### All branches
 - `web_app.py` - FastAPI application that uses the agent
 
 ---
@@ -404,14 +403,20 @@ langgraph_agent.py (low-level):
 Each implementation can be tested independently:
 
 ```bash
-# Test agent_classic.py
+# Test agent_classic.py (classic branch)
+git checkout classic
 python -m scraper.agent_classic
 
-# Test agent.py
+# Test agent.py with langchain.agents (new-agent branch)
+git checkout new-agent
 python -m scraper.agent
 
-# Test langgraph_agent.py
+# Test langgraph_agent.py (new-agent branch)
 python -m scraper.langgraph_agent
+
+# Test agent.py with langgraph.prebuilt (prebuilt branch)
+git checkout prebuilt
+python -m scraper.agent
 ```
 
 Or via the web interface:
