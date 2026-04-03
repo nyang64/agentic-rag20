@@ -8,14 +8,14 @@ if len(sys.argv) == 2:
 else:
     query = input("\nEnter your query: ").strip()
 
-model = SentenceTransformer("all-MiniLM-L6-v2")
+model = SentenceTransformer("nomic-ai/nomic-embed-text-v1.5", trust_remote_code=True, truncate_dim=256)
 conn = psycopg2.connect("postgresql://myuser:mypassword@localhost:5432/myprojdb")
 register_vector(conn)
 cur = conn.cursor()
 cur.execute("SET search_path TO scraper, public;")
 
 #query = "toll roads and expressways in China"
-vec = model.encode(query, normalize_embeddings=True)
+vec = model.encode("search_query: " + query, normalize_embeddings=True)
 
 # vector operator:  <=> cosine distance; <-> Euclidean L2; <#> inner product
 # %s is the place holder for the vec

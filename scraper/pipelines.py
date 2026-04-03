@@ -7,7 +7,7 @@ from pgvector.psycopg2 import register_vector
 
 class PgVectorPipeline:
     def __init__(self):
-        self.model = SentenceTransformer("all-MiniLM-L6-v2")
+        self.model = SentenceTransformer("nomic-ai/nomic-embed-text-v1.5", trust_remote_code=True, truncate_dim=256)
         self.conn = psycopg2.connect(
             "postgresql://myuser:mypassword@localhost:5432/myprojdb"
         )
@@ -39,7 +39,7 @@ class PgVectorPipeline:
         chunks = self.chunk_text(full_text, chunk_size=1500, overlap=50)
 
         for i, chunk in enumerate(chunks):
-            embedding = self.model.encode(chunk, normalize_embeddings=True)
+            embedding = self.model.encode("search_document: " + chunk, normalize_embeddings=True)
             chunk_title = f"{title} [Chunk {i+1}/{len(chunks)}]" if title else f"Chunk {i+1}"
 
             # UNIQUE KEY: (url, chunk_id) or (url, title)

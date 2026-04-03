@@ -5,7 +5,7 @@ from typing import List
 from dotenv import load_dotenv
 
 from langchain_openai import ChatOpenAI
-from langchain_huggingface import HuggingFaceEmbeddings
+from sentence_transformers import SentenceTransformer
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnablePassthrough
@@ -20,15 +20,13 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 # -------------------------------------------------
 # 1. Embeddings
 # -------------------------------------------------
-embeddings = HuggingFaceEmbeddings(
-    model_name="sentence-transformers/all-MiniLM-L6-v2"
-)
+embed_model = SentenceTransformer("nomic-ai/nomic-embed-text-v1.5", trust_remote_code=True, truncate_dim=256)
 
 # -------------------------------------------------
-# 2. LLM – OpenRouter (DeepSeek V3)
+# 2. LLM – OpenRouter (Nemotron)
 # -------------------------------------------------
 llm = ChatOpenAI(
-    model=os.getenv("DEEPSEEK_FREE_MODEL", "deepseek/deepseek-chat-v3.1:free"),
+    model=os.getenv("NEMOTRON_MODEL", "nvidia/nemotron-3-super-120b-a12b:free"),
     openai_api_key=os.getenv("OPENROUTER_API_KEY"),
     openai_api_base="https://openrouter.ai/api/v1",
     temperature=0.1,
@@ -48,7 +46,7 @@ CONNECTION_STRING = os.getenv(
 def retrieve_top3(query: str) -> List[Document]:
     """Run vector search → fetch only top-3 rows → return LangChain Documents."""
     # 1. Embed the query
-    query_vec = embeddings.embed_query(query)
+    query_vec = embed_model.encode("search_query: " + query, normalize_embeddings=True).tolist()
 
     # 2. Connect + search
     conn = psycopg2.connect(CONNECTION_STRING)

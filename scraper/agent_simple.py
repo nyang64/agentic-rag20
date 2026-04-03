@@ -1,10 +1,9 @@
 # scraper/agent_simple.py - Simplified version without external search APIs
 # Uses basic requests or can be adapted to use MCP brave-search
 
-from langchain.agents import create_tool_calling_agent, AgentExecutor
 from langchain_openai import ChatOpenAI
-from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.tools import tool
+from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 import os
 import requests
 from bs4 import BeautifulSoup
@@ -14,7 +13,7 @@ load_dotenv()
 
 # Initialize LLM
 llm = ChatOpenAI(
-    model=os.getenv("OPENAI_FREE_MODEL", "openai/gpt-oss-20b:free"),
+    model=os.getenv("NEMOTRON_MODEL", "nvidia/nemotron-3-super-120b-a12b:free"),
     openai_api_key=os.getenv("OPENROUTER_API_KEY"),
     openai_api_base="https://openrouter.ai/api/v1",
     temperature=0.1,
@@ -97,17 +96,52 @@ def search_local_knowledge(query: str) -> str:
         return f"Error searching local knowledge: {str(e)}"
 
 
+_TOOLS_BY_NAME = {}  # populated in create_agentic_rag
+
+
+class _AgentWrapper:
+    """Simple tool-call loop: call LLM → execute tools → repeat until text answer."""
+
+    def __init__(self, llm_with_tools, system_prompt: str, max_rounds: int = 5):
+        self._llm = llm_with_tools
+        self._system = system_prompt
+        self._max_rounds = max_rounds
+
+    def invoke(self, inputs: dict) -> dict:
+        query = inputs.get("input", "")
+        messages = [SystemMessage(self._system), HumanMessage(query)]
+
+        for _ in range(self._max_rounds):
+            response = self._llm.invoke(messages)
+            messages.append(response)
+
+            # No tool calls → final text answer
+            if not response.tool_calls:
+                return {"output": response.content, "messages": messages}
+
+            # Execute every requested tool
+            for tc in response.tool_calls:
+                tool_fn = _TOOLS_BY_NAME.get(tc["name"])
+                if tool_fn:
+                    result = tool_fn.invoke(tc["args"])
+                else:
+                    result = f"Unknown tool: {tc['name']}"
+                messages.append(ToolMessage(content=str(result), tool_call_id=tc["id"]))
+
+        # Fallback: return whatever the last message says
+        return {"output": messages[-1].content, "messages": messages}
+
+
 def create_agentic_rag():
     """Create the Agentic RAG 2.0 system"""
-    
-    # Define tools list
+
     tools = [
         web_search,
         fetch_webpage,
         search_local_knowledge,
     ]
-    
-    # Define system prompt
+    _TOOLS_BY_NAME.update({t.name: t for t in tools})
+
     system_prompt = """You are an intelligent research assistant with access to multiple tools.
 
 Your capabilities:
@@ -116,42 +150,16 @@ Your capabilities:
 3. Search local knowledge base for domain-specific information (search_local_knowledge)
 
 Guidelines:
-- ALWAYS use web_search for current events, recent information, weather, news, or facts
-- Use fetch_webpage to get detailed content from promising URLs in search results
-- Use search_local_knowledge for domain-specific queries related to previously scraped content
-- Synthesize information from multiple sources when needed
+- Use each tool at most once per query — do not repeat the same search
+- Use search_local_knowledge for domain-specific queries about previously scraped content
+- Use web_search for current events, news, or facts not in the local knowledge base
+- After receiving tool results, synthesize and respond with a final answer
 - Cite your sources with URLs
-- If information is not found, say so clearly
 
-Thought Process:
-1. Analyze the query to determine what information is needed
-2. Choose appropriate tools (may use multiple tools in sequence)
-3. Gather information from tools
-4. Synthesize and provide a comprehensive answer with sources
+Current date: 2026-04-03"""
 
-Current date: 2025-MM-DD (use web search for real-time information)
-"""
-    
-    prompt = ChatPromptTemplate.from_messages([
-        ("system", system_prompt),
-        ("user", "{input}"),
-        MessagesPlaceholder(variable_name="agent_scratchpad"),
-    ])
-    
-    # Create agent using create_tool_calling_agent (LangChain 1.0+)
-    agent = create_tool_calling_agent(llm, tools, prompt)
-    
-    # Create agent executor
-    agent_executor = AgentExecutor(
-        agent=agent,
-        tools=tools,
-        verbose=True,
-        max_iterations=5,
-        handle_parsing_errors=True,
-        return_intermediate_steps=True,
-    )
-    
-    return agent_executor
+    llm_with_tools = llm.bind_tools(tools)
+    return _AgentWrapper(llm_with_tools, system_prompt)
 
 
 # Export
