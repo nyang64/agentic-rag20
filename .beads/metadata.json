@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "agentic_rag20",
+  "project_id": "ecd7982a-2df9-499f-9f72-8d3e5cf32213"
+}
