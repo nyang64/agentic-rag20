@@ -10,14 +10,12 @@ from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.tools import tool
 
-# Optional: Try to import Brave Search, fallback to requests
+# Optional: Try to import Brave Search, fallback to ddgs
 try:
     from langchain_community.utilities import BraveSearchWrapper
     BRAVE_AVAILABLE = True
 except ImportError:
     BRAVE_AVAILABLE = False
-    import requests
-    from bs4 import BeautifulSoup
 
 load_dotenv()
 
@@ -91,24 +89,15 @@ else:
     def web_search(query: str) -> str:
         """Search the web for current information using DuckDuckGo. Use this for recent events, news, facts, or current information."""
         try:
-            # DuckDuckGo HTML search (no API key needed)
-            url = f"https://html.duckduckgo.com/html/?q={requests.utils.quote(query)}"
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
-            }
-            response = requests.get(url, headers=headers, timeout=10)
-            soup = BeautifulSoup(response.text, 'html.parser')
-            
+            from ddgs import DDGS
             results = []
-            for result in soup.find_all('div', class_='result__body')[:5]:
-                title_elem = result.find('a', class_='result__a')
-                snippet_elem = result.find('a', class_='result__snippet')
-                if title_elem and snippet_elem:
-                    title = title_elem.get_text(strip=True)
-                    snippet = snippet_elem.get_text(strip=True)
-                    link = title_elem.get('href', '')
-                    results.append(f"Title: {title}\nSnippet: {snippet}\nURL: {link}\n")
-            
+            with DDGS() as ddgs:
+                for r in ddgs.text(query, max_results=5):
+                    results.append(
+                        f"Title: {r.get('title', '')}\n"
+                        f"Snippet: {r.get('body', '')}\n"
+                        f"URL: {r.get('href', '')}\n"
+                    )
             return "\n".join(results) if results else "No search results found."
         except Exception as e:
             return f"Error searching web: {str(e)}"
