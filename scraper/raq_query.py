@@ -5,7 +5,7 @@ from typing import List
 from dotenv import load_dotenv
 
 from langchain_openai import ChatOpenAI
-from langchain_huggingface import HuggingFaceEmbeddings
+from sentence_transformers import SentenceTransformer
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnablePassthrough
@@ -18,10 +18,12 @@ load_dotenv()
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 # -------------------------------------------------
-# 1. Embeddings
+# 1. Embeddings  (must match what pipelines.py stores: nomic 256-dim)
 # -------------------------------------------------
-embeddings = HuggingFaceEmbeddings(
-    model_name="sentence-transformers/all-MiniLM-L6-v2"
+embed_model = SentenceTransformer(
+    "nomic-ai/nomic-embed-text-v1.5",
+    trust_remote_code=True,
+    truncate_dim=256,
 )
 
 # -------------------------------------------------
@@ -47,8 +49,8 @@ CONNECTION_STRING = os.getenv(
 # -------------------------------------------------
 def retrieve_top3(query: str) -> List[Document]:
     """Run vector search → fetch only top-3 rows → return LangChain Documents."""
-    # 1. Embed the query
-    query_vec = embeddings.embed_query(query)
+    # 1. Embed the query  (nomic requires "search_query: " prefix)
+    query_vec = embed_model.encode("search_query: " + query, normalize_embeddings=True).tolist()
 
     # 2. Connect + search
     conn = psycopg2.connect(CONNECTION_STRING)
