@@ -5,11 +5,11 @@ from typing import List
 from dotenv import load_dotenv
 
 from langchain_openai import ChatOpenAI
-from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnablePassthrough
 from langchain_core.documents import Document
+from sentence_transformers import SentenceTransformer
 import psycopg2
 from pgvector.psycopg2 import register_vector
 from openai import RateLimitError
@@ -18,10 +18,14 @@ load_dotenv()
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 # -------------------------------------------------
-# 1. Embeddings
+# 1. Embeddings — must match the model used in pipelines.py
+#    Data was stored with nomic-embed-text-v1.5 truncated to 256 dims.
+#    Queries must use the "search_query: " prefix.
 # -------------------------------------------------
-embeddings = HuggingFaceEmbeddings(
-    model_name="sentence-transformers/all-MiniLM-L6-v2"
+_embed_model = SentenceTransformer(
+    "nomic-ai/nomic-embed-text-v1.5",
+    trust_remote_code=True,
+    truncate_dim=256,
 )
 
 # -------------------------------------------------
@@ -47,8 +51,11 @@ CONNECTION_STRING = os.getenv(
 # -------------------------------------------------
 def retrieve_top3(query: str) -> List[Document]:
     """Run vector search → fetch only top-3 rows → return LangChain Documents."""
-    # 1. Embed the query
-    query_vec = embeddings.embed_query(query)
+    # 1. Embed the query — nomic requires "search_query: " prefix for queries
+    query_vec = _embed_model.encode(
+        "search_query: " + query,
+        normalize_embeddings=True,
+    ).tolist()
 
     # 2. Connect + search
     conn = psycopg2.connect(CONNECTION_STRING)
