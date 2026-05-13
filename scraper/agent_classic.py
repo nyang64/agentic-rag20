@@ -150,27 +150,26 @@ def search_local_knowledge(query: str) -> str:
 def create_agentic_rag() -> AgentExecutor:
     """Create the Agentic RAG 2.0 system"""
     
-    # Define tools list
+    # Define tools list (order matters: local knowledge checked first)
     tools = [
+        search_local_knowledge,
         web_search,
         fetch_webpage,
-        search_local_knowledge,
     ]
     
     # System prompt
     system_message = """You are an intelligent research assistant with access to multiple tools:
 
-1. web_search - Search current web information (news, events, facts)
-2. fetch_webpage - Get full content from specific URLs
-3. search_local_knowledge - Search previously scraped domain-specific content
+1. search_local_knowledge - Search the local knowledge base (scraped documents, internal docs)
+2. web_search - Search current web information (news, events, facts)
+3. fetch_webpage - Get full content from specific URLs
 
-**Instructions:**
-- For current events, weather, news, recent facts: use web_search first
-- To get details from a specific URL: use fetch_webpage
-- For domain-specific queries about scraped content: use search_local_knowledge
-- Always cite sources with URLs when available
-- If you can't find information, say so clearly
-- Synthesize information from multiple sources when needed
+**Decision rules — follow in order:**
+1. Does the query mention a specific company, product, project, or technical term that might be in internal docs? → call search_local_knowledge FIRST, then decide if web_search is also needed.
+2. Does the query ask for current events, live data (weather, stock prices, news), or recent facts? → call web_search.
+3. Do you have a specific URL you need to read in full? → call fetch_webpage.
+4. If search_local_knowledge returns useful results, prefer those over web results.
+5. Do NOT call web_search for company-specific or product-specific queries before trying search_local_knowledge.
 
 **Formatting Requirements:**
 - After your main answer, ALWAYS add TWO blank lines
@@ -178,13 +177,13 @@ def create_agentic_rag() -> AgentExecutor:
 - List each source URL on a separate line with a dash prefix (e.g., "- URL")
 - Example format:
   [Your answer here]
-  
-  
+
+
   **Sources:**
   - https://example.com/page1
   - https://example.com/page2
 
-**Current date:** 2025-MM-DD (use web search for real-time information)"""
+**Current date:** 2026-05-12 (use web search for real-time information)"""
     
     prompt = ChatPromptTemplate.from_messages([
         ("system", system_message),
@@ -200,7 +199,7 @@ def create_agentic_rag() -> AgentExecutor:
         agent=agent,
         tools=tools,
         verbose=True,
-        max_iterations=5,
+        max_iterations=8,
         handle_parsing_errors=True,
         return_intermediate_steps=True,
     )
