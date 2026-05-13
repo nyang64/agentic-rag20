@@ -5,8 +5,9 @@ from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
 
-# NEW: Import from the LangGraph-based agent implementation
-from scraper.agent import create_agentic_rag_executor, format_answer_with_sources
+# Import from the custom LangGraph workflow implementation
+from scraper.langgraph_agent import create_custom_workflow_executor
+from scraper.agent import format_answer_with_sources
 
 load_dotenv()
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -14,9 +15,9 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 app = FastAPI()
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
-# Initialize agent using the new LangGraph implementation
-# The executor wrapper provides AgentExecutor-compatible interface
-agent_executor = create_agentic_rag_executor()
+# Initialize agent using the custom LangGraph workflow
+# The wrapper provides AgentExecutor-compatible interface
+agent_executor = create_custom_workflow_executor()
 
 
 @app.get("/", response_class=HTMLResponse)
