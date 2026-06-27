@@ -292,12 +292,12 @@ class TestIntegration:
         assert result["faithfulness"] >= 0.5, f"faithfulness={result['faithfulness']:.2f}"
 
     @pytest.mark.flaky(reruns=2)
-    def test_rag_chain_context_recall(self, ragas_llm):
+    def test_rag_chain_answer_relevancy(self, ragas_llm, ragas_embeddings):
+        """Live RAG answer should be relevant to the question asked."""
         from ragas.dataset_schema import SingleTurnSample, EvaluationDataset
         from scraper.raq_query import retrieve_top3
 
         question = "What is Haikou known for as a tourist destination?"
-        ground_truth = "Haikou is the capital city of Hainan province in China."
         docs = retrieve_top3(question)
         assert docs, "Knowledge base returned no documents — check PGVECTOR_DB_URL"
         contexts = [d.page_content for d in docs]
@@ -305,11 +305,11 @@ class TestIntegration:
         answer = chain.invoke(question)
 
         sample = SingleTurnSample(
-            user_input=question, response=answer, retrieved_contexts=contexts, reference=ground_truth,
+            user_input=question, response=answer, retrieved_contexts=contexts,
         )
-        metrics = _get_metrics(ragas_llm, which=("recall",))
+        metrics = _get_metrics(ragas_llm, ragas_embeddings, which=("relevancy",))
         result = _evaluate(EvaluationDataset(samples=[sample]), list(metrics.values()), self._live_run_config())
-        assert result["context_recall"] >= 0.5, f"context_recall={result['context_recall']:.2f}"
+        assert result["answer_relevancy"] >= 0.5, f"answer_relevancy={result['answer_relevancy']:.2f}"
 
     @pytest.mark.flaky(reruns=2)
     def test_rag_chain_full_pipeline(self, ragas_llm, ragas_embeddings):
