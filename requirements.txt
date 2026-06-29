@@ -3,30 +3,20 @@
 
 # ── Web framework ──────────────────────────────────────────────
 fastapi==0.120.4
-uvicorn==0.38.0
-starlette==0.49.1
-python-multipart==0.0.20
 
 # ── CrewAI agent stack ─────────────────────────────────────────
-# crewai: Agent, Task, Crew, Process, LLM, BaseTool
-# litellm: LLM gateway used by CrewAI (OpenRouter via "openrouter/" prefix)
+# crewai brings its own: openai~=1.83.0, python-dotenv~=1.1.1,
+#   starlette, uvicorn, httpx, anyio, pydantic, instructor, etc.
+# litellm requires openai>=2.20.0; crewai requires openai~=1.83.0 —
+#   both work at runtime with openai 2.x (install litellm after crewai)
 crewai==1.9.3
 litellm==1.90.0
-
-# ── OpenAI-compatible client (OpenRouter via litellm) ─────────
-openai==2.44.0
-
-# ── LangChain-core (used by RAGAS evaluation framework internally) ─
-langchain-core==1.4.8
-langsmith==0.4.39
 
 # ── Embeddings (nomic-embed-text-v1.5 for vector search) ──────
 sentence-transformers==5.1.2
 torch==2.2.2
 transformers==4.57.1
-tokenizers==0.22.2
 safetensors==0.6.2
-huggingface-hub==0.36.0
 
 # ── PostgreSQL + pgvector ──────────────────────────────────────
 psycopg2-binary==2.9.11
@@ -35,13 +25,17 @@ pgvector==0.3.6
 # ── Web scraping (content ingestion) ──────────────────────────
 Scrapy==2.13.3
 beautifulsoup4==4.14.2
-requests==2.32.5
 lxml==6.0.2
 playwright==1.55.0
 ddgs>=9.14.2
 
-# ── Utilities ─────────────────────────────────────────────────
-python-dotenv==1.2.1
-pydantic==2.11.10
-httpx==0.28.1
-anyio==4.11.0
+# ── LangChain-core (used by RAGAS evaluation framework internally) ─
+langchain-core==1.4.8
+langsmith==0.4.39
+
+# ── Testing (RAG evaluation) ───────────────────────────────────
+ragas==0.4.3
+deepeval==4.0.7
+# instructor==1.12.0 bundled by crewai — installed automatically
+pytest==9.1.1
+pytest-rerunfailures==16.3
