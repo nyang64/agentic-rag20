@@ -1,23 +1,27 @@
+"""
+web_app.py - FastAPI web app backed by the LlamaIndex ReActAgent (0.14+ workflow API).
+
+Endpoints:
+  GET  /               Serve the chat UI (static/index.html)
+  POST /ask            Stream final answer character-by-character
+  POST /ask_streaming  Stream agent events (tool calls + final answer) in real-time
+  POST /ask_verbose    Return full answer + tools used as JSON (for debugging)
+"""
+
 import os
 import asyncio
-from fastapi import FastAPI, Request, Form
+from fastapi import FastAPI, Form
 from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
 
-# Import from the custom LangGraph workflow implementation
-from scraper.langgraph_agent import create_custom_workflow_executor
-from scraper.agent import format_answer_with_sources
+from scraper.llamaindex_agent import aquery_agent, astream_agent_events
 
 load_dotenv()
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
-app = FastAPI()
+app = FastAPI(title="Agentic RAG — LlamaIndex")
 app.mount("/static", StaticFiles(directory="static"), name="static")
-
-# Initialize agent using the custom LangGraph workflow
-# The wrapper provides AgentExecutor-compatible interface
-agent_executor = create_custom_workflow_executor()
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -28,86 +32,35 @@ async def home():
 
 @app.post("/ask")
 async def ask(query: str = Form(...)):
+    """Run the agent and stream the final answer character-by-character."""
     async def stream_answer():
         try:
-            # Use the LangGraph agent executor
-            result = agent_executor.invoke({"input": query})
-
-            # Format the answer to ensure Sources section is properly formatted
-            answer = format_answer_with_sources(result["output"])
-
-            # Extract sources from intermediate steps
-            sources = []
-            if "intermediate_steps" in result:
-                for action, observation in result["intermediate_steps"]:
-                    if hasattr(action, "tool") and action.tool == "web_search":
-                        # Extract URLs from web search results
-                        sources.append(f"Web Search: {action.tool_input}")
-                    elif hasattr(action, "tool") and action.tool == "fetch_webpage":
-                        tool_input = action.tool_input
-                        if isinstance(tool_input, dict):
-                            tool_input = tool_input.get("url", str(tool_input))
-                        sources.append(f'<a href="{tool_input}" target="_blank">{tool_input}</a>')
-
-            sources_html = "<br>".join(sources) if sources else "Multiple web sources"
-            full = f"{answer}<br><br>Sources:<br>{sources_html}"
-
-            # Stream response
-            for char in full:
+            result = await aquery_agent(query)
+            for char in result["answer"]:
                 yield char
-                await asyncio.sleep(0.01)
-
+                await asyncio.sleep(0.005)
         except Exception as e:
             yield f"Error: {str(e)}"
 
     return StreamingResponse(stream_answer(), media_type="text/plain")
 
 
-@app.post("/ask_verbose")
-async def ask_verbose(query: str = Form(...)):
-    """Return full agent reasoning trace for debugging"""
-    result = agent_executor.invoke({"input": query})
-
-    steps = []
-    for action, observation in result.get("intermediate_steps", []):
-        tool_input = action.tool_input
-        if isinstance(tool_input, dict):
-            tool_input = str(tool_input)
-        steps.append({
-            "tool": action.tool,
-            "input": tool_input,
-            "output": observation[:500] if observation else ""  # Truncate
-        })
-
-    return {
-        "answer": result["output"],
-        "steps": steps
-    }
-
-
 @app.post("/ask_streaming")
 async def ask_streaming(query: str = Form(...)):
-    async def stream_with_thoughts():
-        # Stream agent's thought process
-        yield "Thinking about your question...<br>"
-
+    """Stream tool-call notifications and the final answer as they are produced."""
+    async def stream_events():
+        yield "Thinking...<br>"
         try:
-            async for chunk in agent_executor.astream({"input": query}):
-                if "actions" in chunk:
-                    for action in chunk["actions"]:
-                        tool_input = action.tool_input
-                        if isinstance(tool_input, dict):
-                            tool_input = str(tool_input)
-                        yield f"Using tool: {action.tool}<br>"
-                        yield f"   Input: {tool_input}<br>"
-
-                if "steps" in chunk:
-                    for step in chunk["steps"]:
-                        yield f"Found: {step.observation[:500]}...<br>"
-
-                if "output" in chunk:
-                    yield f"<br>Answer:<br>{chunk['output']}"
+            async for chunk in astream_agent_events(query):
+                yield chunk
         except Exception as e:
-            yield f"<br>Error during streaming: {str(e)}"
+            yield f"<br>Error: {str(e)}"
 
-    return StreamingResponse(stream_with_thoughts(), media_type="text/plain")
+    return StreamingResponse(stream_events(), media_type="text/plain")
+
+
+@app.post("/ask_verbose")
+async def ask_verbose(query: str = Form(...)):
+    """Return full answer and tools used as JSON."""
+    result = await aquery_agent(query)
+    return result

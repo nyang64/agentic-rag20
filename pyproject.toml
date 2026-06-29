@@ -133,6 +133,9 @@ dependencies = [
     "yarl==1.22.0",
     "zope.interface==8.0.1",
     "zstandard==0.25.0",
+    "llama-index-core==0.14.23",
+    "llama-index-llms-openai==0.7.9",
+    "llama-index-embeddings-huggingface==0.7.0",
 ]
 
 [tool.setuptools.packages.find]
