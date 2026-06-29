@@ -10,7 +10,6 @@ import os
 import asyncio
 import pytest
 from dotenv import load_dotenv
-from langchain_openai import ChatOpenAI
 
 load_dotenv()
 
@@ -154,29 +153,6 @@ BAD_ANSWER_CASE = {
         "learning, neural networks, or embedding vectors."
     ),
 }
-
-
-# ---------------------------------------------------------------------------
-# Shared LLM fixture (OpenRouter → same key the app uses)
-# ---------------------------------------------------------------------------
-
-@pytest.fixture(scope="session")
-def openrouter_llm():
-    """ChatOpenAI pointing at OpenRouter for use as an evaluator LLM.
-
-    Model priority: EVAL_MODEL > OPENAI_FREE_MODEL > openai/gpt-4o-mini.
-    Using OPENAI_FREE_MODEL keeps eval in sync with the model the app itself uses.
-    """
-    api_key = os.getenv("OPENROUTER_API_KEY")
-    if not api_key:
-        pytest.skip("OPENROUTER_API_KEY not set – skipping LLM-judge tests")
-    model = os.getenv("OPENAI_FREE_MODEL", "openai/gpt-oss-20b:free")
-    return ChatOpenAI(
-        model=model,
-        openai_api_key=api_key,
-        openai_api_base="https://openrouter.ai/api/v1",
-        temperature=0,
-    )
 
 
 @pytest.fixture(scope="session")

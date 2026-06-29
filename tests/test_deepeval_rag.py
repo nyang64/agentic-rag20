@@ -249,40 +249,44 @@ class TestIntegration:
     Requires: OPENROUTER_API_KEY and PGVECTOR_DB_URL in .env (both are set).
     """
 
-    def _build_test_chain(self):
-        """Build a RAG chain using OPENAI_FREE_MODEL and PGVECTOR_DB_URL."""
-        from langchain_openai import ChatOpenAI
-        from langchain_core.prompts import ChatPromptTemplate
-        from langchain_core.output_parsers import StrOutputParser
-        from langchain_core.runnables import RunnablePassthrough
+    def _rag_answer(self, question: str):
+        """Retrieve pgvector context and answer via LlamaIndex LLM — no LangChain."""
         from scraper.raq_query import retrieve_top3, format_docs
+        from llama_index.llms.openai import OpenAI as LlamaOpenAI
+        from llama_index.llms.openai.utils import ALL_AVAILABLE_MODELS
+        from llama_index.core.llms import ChatMessage, MessageRole
 
-        llm = ChatOpenAI(
-            model=os.getenv("OPENAI_FREE_MODEL", "openai/gpt-oss-20b:free"),
-            openai_api_key=os.getenv("OPENROUTER_API_KEY"),
-            openai_api_base="https://openrouter.ai/api/v1",
+        model = os.getenv("OPENAI_FREE_MODEL", "openai/gpt-oss-20b:free")
+        if model not in ALL_AVAILABLE_MODELS:
+            ALL_AVAILABLE_MODELS[model] = 128000
+
+        docs = retrieve_top3(question)
+        context = format_docs(docs)
+        contexts = [d.page_content for d in docs]
+
+        llm = LlamaOpenAI(
+            model=model,
+            api_key=os.getenv("OPENROUTER_API_KEY"),
+            api_base="https://openrouter.ai/api/v1",
             temperature=0.1,
+            max_tokens=4096,
         )
-        prompt = ChatPromptTemplate.from_template(
-            "You are a helpful assistant. Use the following context to answer the question.\n\n"
-            "Context: {context}\n\nQuestion: {question}\n\nAnswer:"
-        )
-        return (
-            {"context": lambda x: format_docs(retrieve_top3(x)), "question": RunnablePassthrough()}
-            | prompt | llm | StrOutputParser()
-        )
+        response = llm.chat([ChatMessage(
+            role=MessageRole.USER,
+            content=(
+                "You are a helpful assistant. Use the following context to answer the question.\n\n"
+                f"Context: {context}\n\nQuestion: {question}\n\nAnswer:"
+            ),
+        )])
+        return response.message.content or "", contexts
 
     @pytest.mark.flaky(reruns=2)
     def test_rag_chain_faithfulness(self, eval_llm):
         """RAG chain answer about Haikou should be grounded in retrieved context."""
-        from scraper.raq_query import retrieve_top3
-
         question = "How can I get to Haikou by plane?"
-        docs = retrieve_top3(question)
-        assert docs, "Knowledge base returned no documents — check PGVECTOR_DB_URL"
-        contexts = [d.page_content for d in docs]
-        chain = self._build_test_chain()
-        answer = chain.invoke(question)
+        answer, contexts = self._rag_answer(question)
+        assert contexts, "Knowledge base returned no documents — check PGVECTOR_DB_URL"
+        assert answer, "LLM returned an empty answer"
 
         case = LLMTestCase(
             input=question,
@@ -295,14 +299,10 @@ class TestIntegration:
     @pytest.mark.flaky(reruns=2)
     def test_rag_chain_answer_relevancy(self, eval_llm):
         """RAG chain answer should directly address a question about Haikou."""
-        from scraper.raq_query import retrieve_top3
-
         question = "What is Haikou known for?"
-        docs = retrieve_top3(question)
-        assert docs, "Knowledge base returned no documents — check PGVECTOR_DB_URL"
-        contexts = [d.page_content for d in docs]
-        chain = self._build_test_chain()
-        answer = chain.invoke(question)
+        answer, contexts = self._rag_answer(question)
+        assert contexts, "Knowledge base returned no documents — check PGVECTOR_DB_URL"
+        assert answer, "LLM returned an empty answer"
 
         case = LLMTestCase(
             input=question,
@@ -315,15 +315,11 @@ class TestIntegration:
     @pytest.mark.flaky(reruns=2)
     def test_rag_chain_contextual_recall(self, eval_llm):
         """Retrieved context should cover key facts about Haikou as a destination."""
-        from scraper.raq_query import retrieve_top3
-
         question = "What is Haikou and where is it located?"
         ground_truth = "Haikou is the capital of Hainan province in China."
-        docs = retrieve_top3(question)
-        assert docs, "Knowledge base returned no documents — check PGVECTOR_DB_URL"
-        contexts = [d.page_content for d in docs]
-        chain = self._build_test_chain()
-        answer = chain.invoke(question)
+        answer, contexts = self._rag_answer(question)
+        assert contexts, "Knowledge base returned no documents — check PGVECTOR_DB_URL"
+        assert answer, "LLM returned an empty answer"
 
         case = LLMTestCase(
             input=question,
@@ -338,12 +334,13 @@ class TestIntegration:
         assert_test(case, metrics)
 
     @pytest.mark.flaky(reruns=2)
-    def test_langgraph_agent_local_knowledge(self, eval_llm):
-        """LangGraph agent should use search_local_knowledge to answer a travel question."""
-        from scraper.langgraph_agent import query_custom_agent
+    def test_llamaindex_agent_local_knowledge(self, eval_llm):
+        """LlamaIndex agent should use search_local_knowledge to answer a travel question."""
+        import asyncio
+        from scraper.llamaindex_agent import aquery_agent
 
         question = "What should I know about visiting Haikou as a tourist?"
-        result = query_custom_agent(question)
+        result = asyncio.run(aquery_agent(question))
         answer = result.get("answer", "")
         assert answer, "Agent returned an empty answer"
 

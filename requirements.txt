@@ -12,11 +12,6 @@ llama-index-core==0.14.23
 llama-index-llms-openai==0.7.9
 llama-index-embeddings-huggingface==0.7.0
 
-# ── LangChain (used by raq_query.py for pgvector retrieval) ────
-langchain-core==1.4.8
-langchain-openai==1.0.1
-langsmith==0.4.39
-
 # ── OpenAI-compatible client (OpenRouter) ─────────────────────
 openai==2.6.1
 tiktoken==0.12.0
@@ -25,7 +20,7 @@ tiktoken==0.12.0
 sentence-transformers==5.1.2
 torch==2.2.2
 transformers==4.57.1
-tokenizers==0.22.1
+tokenizers==0.22.2
 safetensors==0.6.2
 huggingface-hub==0.36.0
 
