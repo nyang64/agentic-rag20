@@ -38,8 +38,10 @@ from tests.conftest import SAMPLE_QA, BAD_ANSWER_CASE
 
 @pytest.fixture(scope="session")
 def ragas_llm():
+    import json
     import warnings
     from ragas.llms import LlamaIndexLLMWrapper
+    from langchain_core.outputs import LLMResult, Generation
     from llama_index.llms.openai import OpenAI as LlamaOpenAI
     from llama_index.llms.openai.utils import ALL_AVAILABLE_MODELS
 
@@ -58,9 +60,45 @@ def ragas_llm():
         temperature=0,
         max_tokens=4096,
     )
+
+    class _RobustWrapper(LlamaIndexLLMWrapper):
+        """Strips incomplete statement entries from NLI JSON before Pydantic validation.
+
+        Free models sometimes append a trailing {"statement": ""} with no reason/verdict,
+        which causes OutputParserException. We clean it here, before RAGAS parses the text.
+        """
+        @staticmethod
+        def _clean(text: str) -> str:
+            try:
+                data = json.loads(text)
+                if isinstance(data, dict) and "statements" in data:
+                    data["statements"] = [
+                        s for s in data["statements"]
+                        if isinstance(s, dict)
+                        and s.get("statement", "").strip()
+                        and "reason" in s
+                        and "verdict" in s
+                    ]
+                    return json.dumps(data)
+            except Exception:
+                pass
+            return text
+
+        async def agenerate_text(self, prompt, n=1, temperature=None, stop=None, callbacks=None):
+            result = await super().agenerate_text(
+                prompt, n=n, temperature=temperature, stop=stop, callbacks=callbacks
+            )
+            return LLMResult(
+                generations=[
+                    [Generation(text=self._clean(g.text)) for g in gens]
+                    for gens in result.generations
+                ],
+                llm_output=result.llm_output,
+            )
+
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", DeprecationWarning)
-        return LlamaIndexLLMWrapper(llm)
+        return _RobustWrapper(llm)
 
 
 @pytest.fixture(scope="session")
