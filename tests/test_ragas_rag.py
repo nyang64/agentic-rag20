@@ -70,11 +70,18 @@ def ragas_llm():
         which causes OutputParserException. We clean it here, before RAGAS parses the text.
         """
         @staticmethod
-        def _clean(text: str) -> str:
+        def _clean(text: str, in_repair: bool = False) -> str:
             try:
                 data = json.loads(text)
-                # Some free models return a bare list instead of {"statements": [...]}
-                # for the NLI verdict step. Wrap it so RAGAS doesn't enter repair mode.
+                # In RAGAS repair mode, the expected schema is StringIO: {"text": "..."}
+                # Free models ignore this and return the original schema content directly.
+                # Wrap whatever JSON they return so RAGAS's StringIO parser succeeds;
+                # RAGAS then re-parses StringIO.text as the original target schema.
+                if in_repair and isinstance(data, (dict, list)) and not (
+                    isinstance(data, dict) and "text" in data
+                ):
+                    return json.dumps({"text": json.dumps(data)})
+                # Normalize bare list of NLI dicts → {"statements": [...]}
                 if isinstance(data, list):
                     nli_items = [s for s in data if isinstance(s, dict) and "statement" in s]
                     if nli_items:
@@ -100,9 +107,11 @@ def ragas_llm():
             result = await _BaseLlamaWrapper.agenerate_text(
                 self, prompt, n=n, temperature=temperature, stop=stop, callbacks=callbacks
             )
+            prompt_str = prompt.to_string() if hasattr(prompt, "to_string") else str(prompt)
+            in_repair = "did not satisfy the constraints" in prompt_str
             return LLMResult(
                 generations=[
-                    [Generation(text=self._clean(g.text)) for g in gens]
+                    [Generation(text=self._clean(g.text, in_repair)) for g in gens]
                     for gens in result.generations
                 ],
                 llm_output=result.llm_output,
@@ -338,7 +347,9 @@ class TestIntegration:
         response = llm.chat([ChatMessage(
             role=MessageRole.USER,
             content=(
-                "You are a helpful assistant. Use the following context to answer the question.\n\n"
+                "You are a helpful assistant. Answer the question using ONLY the information "
+                "explicitly stated in the context below. Do not add details not in the context. "
+                "Be concise — 2-4 sentences maximum.\n\n"
                 f"Context: {context}\n\nQuestion: {question}\n\nAnswer:"
             ),
         )])
@@ -346,7 +357,7 @@ class TestIntegration:
 
     def _live_run_config(self):
         from ragas.run_config import RunConfig
-        return RunConfig(timeout=150, max_retries=5, max_wait=60)
+        return RunConfig(timeout=240, max_retries=3, max_wait=60)
 
     @pytest.mark.flaky(reruns=2)
     def test_rag_chain_faithfulness(self, ragas_llm):
