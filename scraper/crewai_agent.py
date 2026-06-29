@@ -13,6 +13,7 @@ so each query is self-contained with no shared state between requests.
 """
 
 import os
+import json
 from typing import Any, Dict
 from dotenv import load_dotenv
 
@@ -53,25 +54,19 @@ class WebSearchTool(BaseTool):
 
     def _run(self, query: str) -> str:
         try:
-            import requests
-            from bs4 import BeautifulSoup
-
-            url = f"https://html.duckduckgo.com/html/?q={requests.utils.quote(query)}"
-            headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
-            response = requests.get(url, headers=headers, timeout=10)
-            soup = BeautifulSoup(response.text, "html.parser")
-
-            results = []
-            for result in soup.find_all("div", class_="result__body")[:5]:
-                title_elem = result.find("a", class_="result__a")
-                snippet_elem = result.find("a", class_="result__snippet")
-                if title_elem and snippet_elem:
-                    results.append(
-                        f"Title: {title_elem.get_text(strip=True)}\n"
-                        f"Snippet: {snippet_elem.get_text(strip=True)}\n"
-                        f"URL: {title_elem.get('href', '')}\n"
-                    )
-            return "\n".join(results) if results else "No search results found."
+            from ddgs import DDGS
+            with DDGS() as ddgs:
+                hits = list(ddgs.text(query, max_results=5))
+            if not hits:
+                return "No search results found."
+            parts = []
+            for r in hits:
+                parts.append(
+                    f"Title: {r.get('title', '')}\n"
+                    f"Snippet: {r.get('body', '')}\n"
+                    f"URL: {r.get('href', '')}\n"
+                )
+            return "\n".join(parts)
         except Exception as e:
             return f"Error searching web: {str(e)}"
 
@@ -169,6 +164,23 @@ def _build_agent() -> Agent:
 # crew.kickoff() is synchronous; use aquery_agent for async FastAPI contexts.
 # ---------------------------------------------------------------------------
 
+def _is_stuck_tool_call(text: str) -> bool:
+    """Return True if the agent output is a raw tool-call JSON rather than an answer.
+
+    This happens when the model never emits a 'Final Answer' line — usually
+    because all tool calls returned empty results and the model ran out of
+    iterations still trying to search.
+    """
+    stripped = text.strip()
+    if not stripped.startswith("{"):
+        return False
+    try:
+        parsed = json.loads(stripped)
+        return "action" in parsed and "action_input" in parsed
+    except (json.JSONDecodeError, ValueError):
+        return False
+
+
 def query_agent(question: str) -> Dict[str, Any]:
     """Synchronously run the CrewAI agent and return the answer."""
     agent = _build_agent()
@@ -196,9 +208,16 @@ def query_agent(question: str) -> Dict[str, Any]:
     )
 
     result = crew.kickoff()
-    return {
-        "answer": result.raw if hasattr(result, "raw") else str(result),
-    }
+    raw = result.raw if hasattr(result, "raw") else str(result)
+
+    if _is_stuck_tool_call(raw):
+        raw = (
+            "I searched for information but was unable to retrieve results to answer "
+            "your question. This may be a temporary issue with the search tool. "
+            "Please try rephrasing your question or asking again."
+        )
+
+    return {"answer": raw}
 
 
 async def aquery_agent(question: str) -> Dict[str, Any]:
