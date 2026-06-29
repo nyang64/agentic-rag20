@@ -74,11 +74,13 @@ class OpenRouterEvalLLM(DeepEvalBaseLLM):
                 model=self._model,
                 response_model=schema,
                 messages=[{"role": "user", "content": prompt}],
+                max_tokens=4096,
                 max_retries=3,
             )
         response = self._raw_client.chat.completions.create(
             model=self._model,
             messages=[{"role": "user", "content": prompt}],
+            max_tokens=4096,
         )
         return response.choices[0].message.content
 
@@ -272,6 +274,7 @@ class TestIntegration:
                 ),
             }],
             temperature=0.1,
+            max_tokens=4096,
         )
         return resp.choices[0].message.content or "", contexts
 

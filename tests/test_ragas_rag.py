@@ -65,7 +65,7 @@ def ragas_llm():
             for m in messages:
                 role = "assistant" if m.type == "ai" else ("user" if m.type == "human" else m.type)
                 oai_msgs.append({"role": role, "content": m.content})
-            resp = client.chat.completions.create(model=self.model_name, messages=oai_msgs, temperature=0)
+            resp = client.chat.completions.create(model=self.model_name, messages=oai_msgs, temperature=0, max_tokens=4096)
             content = resp.choices[0].message.content or ""
             return ChatResult(generations=[ChatGeneration(message=AIMessage(content=content))])
 
@@ -296,6 +296,7 @@ class TestIntegration:
                 ),
             }],
             temperature=0.1,
+            max_tokens=4096,
         )
         return resp.choices[0].message.content or "", contexts
 
