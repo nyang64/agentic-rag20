@@ -65,9 +65,22 @@ def ragas_llm():
 
 @pytest.fixture(scope="session")
 def ragas_embeddings():
-    """Local sentence-transformers embeddings via RAGAS native provider."""
-    from ragas.embeddings import HuggingFaceEmbeddings
-    return HuggingFaceEmbeddings(model="sentence-transformers/all-MiniLM-L6-v2")
+    """Local sentence-transformers embeddings wrapped for RAGAS (langchain_core only, no langchain_huggingface)."""
+    from ragas.embeddings import LangchainEmbeddingsWrapper
+    from langchain_core.embeddings import Embeddings as _LCEmbeddings
+    from sentence_transformers import SentenceTransformer
+
+    class _STEmbeddings(_LCEmbeddings):
+        def __init__(self):
+            self._model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+
+        def embed_documents(self, texts):
+            return self._model.encode(texts, normalize_embeddings=True).tolist()
+
+        def embed_query(self, text):
+            return self._model.encode(text, normalize_embeddings=True).tolist()
+
+    return LangchainEmbeddingsWrapper(_STEmbeddings())
 
 
 # ---------------------------------------------------------------------------
