@@ -338,12 +338,12 @@ class TestIntegration:
         assert_test(case, metrics)
 
     @pytest.mark.flaky(reruns=2)
-    def test_langgraph_agent_local_knowledge(self, eval_llm):
-        """LangGraph agent should use search_local_knowledge to answer a travel question."""
-        from scraper.langgraph_agent import query_custom_agent
+    def test_crewai_agent_local_knowledge(self, eval_llm):
+        """CrewAI agent should use search_local_knowledge to answer a travel question."""
+        from scraper.crewai_agent import query_agent
 
         question = "What should I know about visiting Haikou as a tourist?"
-        result = query_custom_agent(question)
+        result = query_agent(question)
         answer = result.get("answer", "")
         assert answer, "Agent returned an empty answer"
 

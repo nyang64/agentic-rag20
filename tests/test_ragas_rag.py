@@ -341,12 +341,12 @@ class TestIntegration:
         assert result["answer_relevancy"] >= 0.5, f"answer_relevancy={result['answer_relevancy']:.2f}"
 
     @pytest.mark.flaky(reruns=2)
-    def test_langgraph_agent_local_knowledge(self, ragas_llm, ragas_embeddings):
+    def test_crewai_agent_local_knowledge(self, ragas_llm, ragas_embeddings):
         from ragas.dataset_schema import SingleTurnSample, EvaluationDataset
-        from scraper.langgraph_agent import query_custom_agent
+        from scraper.crewai_agent import query_agent
 
         question = "What should I know about visiting Haikou as a tourist?"
-        agent_result = query_custom_agent(question)
+        agent_result = query_agent(question)
         answer = agent_result.get("answer", "")
         assert answer, "Agent returned an empty answer"
 
