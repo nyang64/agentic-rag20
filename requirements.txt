@@ -16,9 +16,8 @@ litellm==1.90.0
 # ── OpenAI-compatible client (OpenRouter via litellm) ─────────
 openai==2.44.0
 
-# ── LangChain (used by raq_query.py for pgvector retrieval) ────
+# ── LangChain-core (used by RAGAS evaluation framework internally) ─
 langchain-core==1.4.8
-langchain-openai==1.0.1
 langsmith==0.4.39
 
 # ── Embeddings (nomic-embed-text-v1.5 for vector search) ──────

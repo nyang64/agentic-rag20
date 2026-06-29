@@ -39,30 +39,58 @@ from tests.conftest import SAMPLE_QA, BAD_ANSWER_CASE
 @pytest.fixture(scope="session")
 def ragas_llm():
     from ragas.llms import LangchainLLMWrapper
-    from langchain_openai import ChatOpenAI
+    from langchain_core.language_models.chat_models import BaseChatModel
+    from langchain_core.messages import AIMessage
+    from langchain_core.outputs import ChatGeneration, ChatResult
+    from openai import OpenAI as _OAI
+    from pydantic import Field
 
     api_key = os.getenv("OPENROUTER_API_KEY")
     if not api_key:
         pytest.skip("OPENROUTER_API_KEY not set – skipping Ragas tests")
 
     model = os.getenv("OPENAI_FREE_MODEL", "openai/gpt-oss-20b:free")
-    lc_llm = ChatOpenAI(
-        model=model,
-        openai_api_key=api_key,
-        openai_api_base="https://openrouter.ai/api/v1",
-        temperature=0,
-    )
+
+    class _OpenRouterChatModel(BaseChatModel):
+        model_name: str = Field(default="")
+        api_key: str = Field(default="")
+
+        @property
+        def _llm_type(self) -> str:
+            return "openrouter"
+
+        def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+            client = _OAI(api_key=self.api_key, base_url="https://openrouter.ai/api/v1")
+            oai_msgs = []
+            for m in messages:
+                role = "assistant" if m.type == "ai" else ("user" if m.type == "human" else m.type)
+                oai_msgs.append({"role": role, "content": m.content})
+            resp = client.chat.completions.create(model=self.model_name, messages=oai_msgs, temperature=0)
+            content = resp.choices[0].message.content or ""
+            return ChatResult(generations=[ChatGeneration(message=AIMessage(content=content))])
+
+    lc_llm = _OpenRouterChatModel(model_name=model, api_key=api_key)
     return LangchainLLMWrapper(lc_llm)
 
 
 @pytest.fixture(scope="session")
 def ragas_embeddings():
-    """Local sentence-transformers embeddings — avoids async connection-pool issues."""
+    """Local sentence-transformers embeddings via a langchain-core adapter (no langchain-huggingface)."""
     from ragas.embeddings import LangchainEmbeddingsWrapper
-    from langchain_huggingface import HuggingFaceEmbeddings
+    from langchain_core.embeddings import Embeddings as _LCEmbeddings
+    from sentence_transformers import SentenceTransformer
 
-    emb = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
-    return LangchainEmbeddingsWrapper(emb)
+    class _STEmbeddings(_LCEmbeddings):
+        def __init__(self):
+            self._model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+
+        def embed_documents(self, texts):
+            return self._model.encode(texts, normalize_embeddings=True).tolist()
+
+        def embed_query(self, text):
+            return self._model.encode(text, normalize_embeddings=True).tolist()
+
+    return LangchainEmbeddingsWrapper(_STEmbeddings())
 
 
 # ---------------------------------------------------------------------------
@@ -245,27 +273,31 @@ class TestIntegration:
     Requires: OPENROUTER_API_KEY and PGVECTOR_DB_URL in .env (both are set).
     """
 
-    def _build_test_chain(self):
-        from langchain_openai import ChatOpenAI
-        from langchain_core.prompts import ChatPromptTemplate
-        from langchain_core.output_parsers import StrOutputParser
-        from langchain_core.runnables import RunnablePassthrough
+    def _rag_answer(self, question: str):
+        """Retrieve pgvector context and answer via OpenRouter — no LangChain chain."""
+        from openai import OpenAI
         from scraper.raq_query import retrieve_top3, format_docs
 
-        llm = ChatOpenAI(
+        docs = retrieve_top3(question)
+        context = format_docs(docs)
+        contexts = [d.page_content for d in docs]
+
+        client = OpenAI(
+            api_key=os.getenv("OPENROUTER_API_KEY"),
+            base_url="https://openrouter.ai/api/v1",
+        )
+        resp = client.chat.completions.create(
             model=os.getenv("OPENAI_FREE_MODEL", "openai/gpt-oss-20b:free"),
-            openai_api_key=os.getenv("OPENROUTER_API_KEY"),
-            openai_api_base="https://openrouter.ai/api/v1",
+            messages=[{
+                "role": "user",
+                "content": (
+                    "You are a helpful assistant. Use the following context to answer the question.\n\n"
+                    f"Context: {context}\n\nQuestion: {question}\n\nAnswer:"
+                ),
+            }],
             temperature=0.1,
         )
-        prompt = ChatPromptTemplate.from_template(
-            "You are a helpful assistant. Use the following context to answer the question.\n\n"
-            "Context: {context}\n\nQuestion: {question}\n\nAnswer:"
-        )
-        return (
-            {"context": lambda x: format_docs(retrieve_top3(x)), "question": RunnablePassthrough()}
-            | prompt | llm | StrOutputParser()
-        )
+        return resp.choices[0].message.content or "", contexts
 
     def _live_run_config(self):
         from ragas.run_config import RunConfig
@@ -274,14 +306,11 @@ class TestIntegration:
     @pytest.mark.flaky(reruns=2)
     def test_rag_chain_faithfulness(self, ragas_llm):
         from ragas.dataset_schema import SingleTurnSample, EvaluationDataset
-        from scraper.raq_query import retrieve_top3
 
         question = "How can I get to Haikou by plane?"
-        docs = retrieve_top3(question)
-        assert docs, "Knowledge base returned no documents — check PGVECTOR_DB_URL"
-        contexts = [d.page_content for d in docs]
-        chain = self._build_test_chain()
-        answer = chain.invoke(question)
+        answer, contexts = self._rag_answer(question)
+        assert contexts, "Knowledge base returned no documents — check PGVECTOR_DB_URL"
+        assert answer, "LLM returned an empty answer"
 
         sample = SingleTurnSample(
             user_input=question, response=answer, retrieved_contexts=contexts,
@@ -295,14 +324,11 @@ class TestIntegration:
     def test_rag_chain_answer_relevancy(self, ragas_llm, ragas_embeddings):
         """Live RAG answer should be relevant to the question asked."""
         from ragas.dataset_schema import SingleTurnSample, EvaluationDataset
-        from scraper.raq_query import retrieve_top3
 
         question = "What is Haikou known for as a tourist destination?"
-        docs = retrieve_top3(question)
-        assert docs, "Knowledge base returned no documents — check PGVECTOR_DB_URL"
-        contexts = [d.page_content for d in docs]
-        chain = self._build_test_chain()
-        answer = chain.invoke(question)
+        answer, contexts = self._rag_answer(question)
+        assert contexts, "Knowledge base returned no documents — check PGVECTOR_DB_URL"
+        assert answer, "LLM returned an empty answer"
 
         sample = SingleTurnSample(
             user_input=question, response=answer, retrieved_contexts=contexts,
@@ -314,15 +340,12 @@ class TestIntegration:
     @pytest.mark.flaky(reruns=2)
     def test_rag_chain_full_pipeline(self, ragas_llm, ragas_embeddings):
         from ragas.dataset_schema import SingleTurnSample, EvaluationDataset
-        from scraper.raq_query import retrieve_top3
 
         question = "What is there to do in Haikou?"
         ground_truth = "Haikou is a city in Hainan, China with various attractions and activities."
-        docs = retrieve_top3(question)
-        assert docs, "Knowledge base returned no documents — check PGVECTOR_DB_URL"
-        contexts = [d.page_content for d in docs]
-        chain = self._build_test_chain()
-        answer = chain.invoke(question)
+        answer, contexts = self._rag_answer(question)
+        assert contexts, "Knowledge base returned no documents — check PGVECTOR_DB_URL"
+        assert answer, "LLM returned an empty answer"
 
         sample = SingleTurnSample(
             user_input=question, response=answer, retrieved_contexts=contexts, reference=ground_truth,
