@@ -61,7 +61,9 @@ def ragas_llm():
         max_tokens=4096,
     )
 
-    class _RobustWrapper(LlamaIndexLLMWrapper):
+    _BaseLlamaWrapper = LlamaIndexLLMWrapper.new_target
+
+    class _RobustWrapper(_BaseLlamaWrapper):
         """Strips incomplete statement entries from NLI JSON before Pydantic validation.
 
         Free models sometimes append a trailing {"statement": ""} with no reason/verdict,
@@ -71,13 +73,23 @@ def ragas_llm():
         def _clean(text: str) -> str:
             try:
                 data = json.loads(text)
+                # Some free models return a bare list instead of {"statements": [...]}
+                # for the NLI verdict step. Wrap it so RAGAS doesn't enter repair mode.
+                if isinstance(data, list):
+                    nli_items = [s for s in data if isinstance(s, dict) and "statement" in s]
+                    if nli_items:
+                        data = {"statements": nli_items}
                 if isinstance(data, dict) and "statements" in data:
                     data["statements"] = [
                         s for s in data["statements"]
-                        if isinstance(s, dict)
-                        and s.get("statement", "").strip()
-                        and "reason" in s
-                        and "verdict" in s
+                        # Pass through string statements (step 1: extraction)
+                        # Only drop dicts that are incomplete (step 2: NLI verdicts)
+                        if not isinstance(s, dict)
+                        or (
+                            s.get("statement", "").strip()
+                            and "reason" in s
+                            and "verdict" in s
+                        )
                     ]
                     return json.dumps(data)
             except Exception:
@@ -85,8 +97,8 @@ def ragas_llm():
             return text
 
         async def agenerate_text(self, prompt, n=1, temperature=None, stop=None, callbacks=None):
-            result = await super().agenerate_text(
-                prompt, n=n, temperature=temperature, stop=stop, callbacks=callbacks
+            result = await _BaseLlamaWrapper.agenerate_text(
+                self, prompt, n=n, temperature=temperature, stop=stop, callbacks=callbacks
             )
             return LLMResult(
                 generations=[
