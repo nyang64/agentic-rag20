@@ -1,11 +1,14 @@
 """
-web_app.py - FastAPI web app backed by the LlamaIndex ReActAgent (0.14+ workflow API).
+web_app.py - FastAPI web app backed by the CrewAI research agent.
+
+CrewAI's crew.kickoff() is synchronous, so async endpoints run it in a
+thread pool executor and then stream the final answer character-by-character.
 
 Endpoints:
   GET  /               Serve the chat UI (static/index.html)
-  POST /ask            Stream final answer character-by-character
-  POST /ask_streaming  Stream agent events (tool calls + final answer) in real-time
-  POST /ask_verbose    Return full answer + tools used as JSON (for debugging)
+  POST /ask            Stream the final answer character-by-character
+  POST /ask_streaming  Same as /ask but prefixed with a "Thinking..." notice
+  POST /ask_verbose    Return full answer as JSON (for debugging)
 """
 
 import os
@@ -15,12 +18,12 @@ from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
 
-from scraper.llamaindex_agent import aquery_agent, astream_agent_events
+from scraper.crewai_agent import aquery_agent
 
 load_dotenv()
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
-app = FastAPI(title="Agentic RAG — LlamaIndex")
+app = FastAPI(title="Agentic RAG — CrewAI")
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 
@@ -32,7 +35,7 @@ async def home():
 
 @app.post("/ask")
 async def ask(query: str = Form(...)):
-    """Run the agent and stream the final answer character-by-character."""
+    """Run the CrewAI agent and stream the final answer character-by-character."""
     async def stream_answer():
         try:
             result = await aquery_agent(query)
@@ -47,20 +50,22 @@ async def ask(query: str = Form(...)):
 
 @app.post("/ask_streaming")
 async def ask_streaming(query: str = Form(...)):
-    """Stream tool-call notifications and the final answer as they are produced."""
-    async def stream_events():
-        yield "Thinking...<br>"
+    """Run the agent with a visible thinking notice, then stream the answer."""
+    async def stream_with_notice():
+        yield "Thinking — crew is working on your question...<br><br>"
         try:
-            async for chunk in astream_agent_events(query):
-                yield chunk
+            result = await aquery_agent(query)
+            for char in result["answer"]:
+                yield char
+                await asyncio.sleep(0.005)
         except Exception as e:
             yield f"<br>Error: {str(e)}"
 
-    return StreamingResponse(stream_events(), media_type="text/plain")
+    return StreamingResponse(stream_with_notice(), media_type="text/plain")
 
 
 @app.post("/ask_verbose")
 async def ask_verbose(query: str = Form(...)):
-    """Return full answer and tools used as JSON."""
+    """Return the full answer as JSON."""
     result = await aquery_agent(query)
     return result

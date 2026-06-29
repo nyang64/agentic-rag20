@@ -1,4 +1,4 @@
-# llamaindex branch — LlamaIndex ReActAgent with pgvector RAG
+# crewai branch — CrewAI research agent with pgvector RAG
 # Install: pip install -r requirements.txt
 
 # ── Web framework ──────────────────────────────────────────────
@@ -7,25 +7,25 @@ uvicorn==0.38.0
 starlette==0.49.1
 python-multipart==0.0.20
 
-# ── LlamaIndex agent stack ─────────────────────────────────────
-llama-index-core==0.14.23
-llama-index-llms-openai==0.7.9
-llama-index-embeddings-huggingface==0.7.0
+# ── CrewAI agent stack ─────────────────────────────────────────
+# crewai: Agent, Task, Crew, Process, LLM, BaseTool
+# litellm: LLM gateway used by CrewAI (OpenRouter via "openrouter/" prefix)
+crewai==1.9.3
+litellm==1.90.0
+
+# ── OpenAI-compatible client (OpenRouter via litellm) ─────────
+openai==2.44.0
 
 # ── LangChain (used by raq_query.py for pgvector retrieval) ────
 langchain-core==1.4.8
 langchain-openai==1.0.1
 langsmith==0.4.39
 
-# ── OpenAI-compatible client (OpenRouter) ─────────────────────
-openai==2.6.1
-tiktoken==0.12.0
-
 # ── Embeddings (nomic-embed-text-v1.5 for vector search) ──────
 sentence-transformers==5.1.2
 torch==2.2.2
 transformers==4.57.1
-tokenizers==0.22.1
+tokenizers==0.20.3
 safetensors==0.6.2
 huggingface-hub==0.36.0
 
@@ -42,6 +42,6 @@ playwright==1.55.0
 
 # ── Utilities ─────────────────────────────────────────────────
 python-dotenv==1.2.1
-pydantic==2.12.3
+pydantic==2.11.10
 httpx==0.28.1
 anyio==4.11.0
