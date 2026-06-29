@@ -38,16 +38,29 @@ from tests.conftest import SAMPLE_QA, BAD_ANSWER_CASE
 
 @pytest.fixture(scope="session")
 def ragas_llm():
-    from ragas.llms import llm_factory
-    from openai import OpenAI
+    import warnings
+    from ragas.llms import LlamaIndexLLMWrapper
+    from llama_index.llms.openai import OpenAI as LlamaOpenAI
+    from llama_index.llms.openai.utils import ALL_AVAILABLE_MODELS
 
     api_key = os.getenv("OPENROUTER_API_KEY")
     if not api_key:
         pytest.skip("OPENROUTER_API_KEY not set – skipping Ragas tests")
 
     model = os.getenv("OPENAI_FREE_MODEL", "openai/gpt-oss-20b:free")
-    client = OpenAI(api_key=api_key, base_url="https://openrouter.ai/api/v1")
-    return llm_factory(model=model, provider="openai", client=client)
+    if model not in ALL_AVAILABLE_MODELS:
+        ALL_AVAILABLE_MODELS[model] = 128000
+
+    llm = LlamaOpenAI(
+        model=model,
+        api_key=api_key,
+        api_base="https://openrouter.ai/api/v1",
+        temperature=0,
+        max_tokens=4096,
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        return LlamaIndexLLMWrapper(llm)
 
 
 @pytest.fixture(scope="session")
