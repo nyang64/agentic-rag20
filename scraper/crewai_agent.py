@@ -14,7 +14,8 @@ so each query is self-contained with no shared state between requests.
 
 import os
 import json
-from typing import Any, Dict
+import psycopg2
+from typing import Any, Dict, List, Tuple
 from dotenv import load_dotenv
 
 from crewai import Agent, Task, Crew, Process, LLM
@@ -22,6 +23,101 @@ from crewai.tools import BaseTool
 
 load_dotenv()
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
+# ---------------------------------------------------------------------------
+# PostgreSQL conversation store
+# Schema: session_id | turns (JSONB list of {role,content}) | summary (TEXT)
+# ---------------------------------------------------------------------------
+
+_TABLE = "crewai_chat_sessions"
+
+
+def create_sessions_table(db_url: str) -> None:
+    with psycopg2.connect(db_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(f"""
+                CREATE TABLE IF NOT EXISTS {_TABLE} (
+                    session_id TEXT PRIMARY KEY,
+                    turns      JSONB        NOT NULL DEFAULT '[]',
+                    summary    TEXT         NOT NULL DEFAULT '',
+                    updated_at TIMESTAMPTZ  DEFAULT NOW()
+                )
+            """)
+        conn.commit()
+
+
+def _load_session(db_url: str, session_id: str) -> Tuple[List[Dict], str]:
+    with psycopg2.connect(db_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(f"SELECT turns, summary FROM {_TABLE} WHERE session_id=%s", (session_id,))
+            row = cur.fetchone()
+    return (row[0], row[1]) if row else ([], "")
+
+
+def _save_session(db_url: str, session_id: str, turns: List[Dict], summary: str) -> None:
+    data = json.dumps(turns)
+    with psycopg2.connect(db_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""INSERT INTO {_TABLE} (session_id, turns, summary, updated_at)
+                    VALUES (%s, %s::jsonb, %s, NOW())
+                    ON CONFLICT (session_id)
+                    DO UPDATE SET turns=%s::jsonb, summary=%s, updated_at=NOW()""",
+                (session_id, data, summary, data, summary),
+            )
+        conn.commit()
+
+
+def _summarize_turns(turns: List[Dict], existing_summary: str) -> str:
+    """Call the LLM via litellm to produce a rolling summary."""
+    import litellm
+    transcript = "\n".join(
+        f"{'User' if t['role'] == 'user' else 'Assistant'}: {t['content'][:500]}"
+        for t in turns
+    )
+    if existing_summary:
+        prompt = (
+            f"Previous summary:\n{existing_summary}\n\n"
+            f"New conversation turns to incorporate:\n{transcript}\n\n"
+            "Update the summary to capture all important facts, names, and context. Be concise."
+        )
+    else:
+        prompt = (
+            f"Summarize this conversation, capturing all important facts, names, and context:\n\n"
+            f"{transcript}\n\nBe concise but complete."
+        )
+    model = os.getenv("OPENAI_FREE_MODEL", "openai/gpt-4o-mini")
+    response = litellm.completion(
+        model=f"openrouter/{model}",
+        messages=[{"role": "user", "content": prompt}],
+        api_key=os.getenv("OPENROUTER_API_KEY"),
+        max_tokens=500,
+    )
+    return response.choices[0].message.content
+
+
+def _maybe_summarize(turns: List[Dict], summary: str) -> Tuple[List[Dict], str]:
+    """Summarize all but the last user+assistant pair when turn count hits threshold."""
+    threshold = int(os.getenv("SUMMARIZE_AFTER_TURNS", "4"))
+    user_count = sum(1 for t in turns if t["role"] == "user")
+    if user_count < threshold:
+        return turns, summary
+    to_summarize = turns[:-2]   # everything except the last user+assistant pair
+    new_summary = _summarize_turns(to_summarize, summary)
+    return turns[-2:], new_summary  # keep only the last pair
+
+
+def _build_context(turns: List[Dict], summary: str) -> str:
+    """Format summary + recent turns as context for injection into the task."""
+    parts = []
+    if summary:
+        parts.append(f"[Conversation Summary]\n{summary}")
+    if turns:
+        parts.append("[Recent Conversation]")
+        for t in turns:
+            role = "User" if t["role"] == "user" else "Assistant"
+            parts.append(f"{role}: {t['content'][:600]}")
+    return "\n".join(parts)
 
 
 # ---------------------------------------------------------------------------
@@ -181,31 +277,38 @@ def _is_stuck_tool_call(text: str) -> bool:
         return False
 
 
-def query_agent(question: str) -> Dict[str, Any]:
+def query_agent(question: str, session_id: str = "") -> Dict[str, Any]:
     """Synchronously run the CrewAI agent and return the answer."""
-    agent = _build_agent()
+    db_url = os.getenv("PGVECTOR_DB_URL", "")
 
+    # Load conversation history from PostgreSQL
+    turns, summary = [], ""
+    if session_id and db_url:
+        turns, summary = _load_session(db_url, session_id)
+
+    # Inject prior context into the task description
+    context = _build_context(turns, summary)
+    task_desc = ""
+    if context:
+        task_desc = f"Conversation context (use this to answer follow-up questions):\n{context}\n\n---\n\n"
+    task_desc += (
+        f"Answer the following question thoroughly using your available tools:\n\n"
+        f"{question}\n\n"
+        "Use web_search for current information, fetch_webpage to read specific "
+        "URLs, and search_local_knowledge for domain-specific content. "
+        "Cite all sources with their URLs."
+    )
+
+    agent = _build_agent()
     task = Task(
-        description=(
-            f"Answer the following question thoroughly using your available tools:\n\n"
-            f"{question}\n\n"
-            "Use web_search for current information, fetch_webpage to read specific "
-            "URLs, and search_local_knowledge for domain-specific content. "
-            "Cite all sources with their URLs."
-        ),
+        description=task_desc,
         expected_output=(
             "A comprehensive, accurate answer followed by a Sources section "
             "listing all URLs referenced."
         ),
         agent=agent,
     )
-
-    crew = Crew(
-        agents=[agent],
-        tasks=[task],
-        process=Process.sequential,
-        verbose=False,
-    )
+    crew = Crew(agents=[agent], tasks=[task], process=Process.sequential, verbose=False)
 
     result = crew.kickoff()
     raw = result.raw if hasattr(result, "raw") else str(result)
@@ -217,19 +320,27 @@ def query_agent(question: str) -> Dict[str, Any]:
             "Please try rephrasing your question or asking again."
         )
 
+    # Persist updated history; summarize if threshold reached
+    if session_id and db_url:
+        turns.append({"role": "user", "content": question})
+        turns.append({"role": "assistant", "content": raw[:1000]})
+        turns, summary = _maybe_summarize(turns, summary)
+        _save_session(db_url, session_id, turns, summary)
+
     return {"answer": raw}
 
 
-async def aquery_agent(question: str) -> Dict[str, Any]:
+async def aquery_agent(question: str, session_id: str = "") -> Dict[str, Any]:
     """Async wrapper — runs crew.kickoff() in a thread pool."""
     import asyncio
     loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, query_agent, question)
+    return await loop.run_in_executor(None, query_agent, question, session_id)
 
 
 __all__ = [
     "query_agent",
     "aquery_agent",
+    "create_sessions_table",
     "WebSearchTool",
     "FetchWebpageTool",
     "SearchLocalKnowledgeTool",

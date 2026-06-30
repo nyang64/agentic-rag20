@@ -13,17 +13,31 @@ Endpoints:
 
 import os
 import asyncio
-from fastapi import FastAPI, Form
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, Form, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
 
-from scraper.crewai_agent import aquery_agent
+from scraper.crewai_agent import aquery_agent, create_sessions_table
 
 load_dotenv()
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
-app = FastAPI(title="Agentic RAG — CrewAI")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    db_url = os.getenv("PGVECTOR_DB_URL", "")
+    if db_url:
+        try:
+            create_sessions_table(db_url)
+            print("crewai_chat_sessions table ready")
+        except Exception as e:
+            print(f"Warning: could not create sessions table ({e})")
+    yield
+
+
+app = FastAPI(title="Agentic RAG — CrewAI", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 
@@ -34,11 +48,11 @@ async def home():
 
 
 @app.post("/ask")
-async def ask(query: str = Form(...)):
+async def ask(query: str = Form(...), session_id: str = Form(default="")):
     """Run the CrewAI agent and stream the final answer character-by-character."""
     async def stream_answer():
         try:
-            result = await aquery_agent(query)
+            result = await aquery_agent(query, session_id=session_id)
             for char in result["answer"]:
                 yield char
                 await asyncio.sleep(0.005)
@@ -49,12 +63,12 @@ async def ask(query: str = Form(...)):
 
 
 @app.post("/ask_streaming")
-async def ask_streaming(query: str = Form(...)):
+async def ask_streaming(query: str = Form(...), session_id: str = Form(default="")):
     """Run the agent with a visible thinking notice, then stream the answer."""
     async def stream_with_notice():
         yield "Thinking — crew is working on your question...<br><br>"
         try:
-            result = await aquery_agent(query)
+            result = await aquery_agent(query, session_id=session_id)
             for char in result["answer"]:
                 yield char
                 await asyncio.sleep(0.005)
@@ -65,7 +79,7 @@ async def ask_streaming(query: str = Form(...)):
 
 
 @app.post("/ask_verbose")
-async def ask_verbose(query: str = Form(...)):
+async def ask_verbose(query: str = Form(...), session_id: str = Form(default="")):
     """Return the full answer as JSON."""
-    result = await aquery_agent(query)
+    result = await aquery_agent(query, session_id=session_id)
     return result

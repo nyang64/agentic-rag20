@@ -43,6 +43,7 @@
 <body>
   <h1>🤖 Agentic RAG 2.0 - Web-Powered AI</h1>
   <p style="color: #666;">Ask anything - I'll search the web and provide current information!</p>
+  <p id="session-info" style="color: #888; font-size: 0.8em; font-family: monospace;"></p>
   
   <div class="chat" id="chat">
     <div class="message bot">
@@ -72,6 +73,15 @@
   </div>
 
   <script>
+    // Session ID persists across page reloads; new tab = new session
+    let sessionId = sessionStorage.getItem('ragSessionId');
+    if (!sessionId) {
+      sessionId = crypto.randomUUID();
+      sessionStorage.setItem('ragSessionId', sessionId);
+    }
+    document.getElementById('session-info').textContent =
+      `Session: ${sessionId.slice(0, 8)}… (memory active)`;
+
     const form = document.getElementById('form');
     const chat = document.getElementById('chat');
     const queryInput = document.getElementById('query');
@@ -108,7 +118,7 @@
         const response = await fetch('/ask', {
           method: 'POST',
           headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-          body: new URLSearchParams({ query })
+          body: new URLSearchParams({ query, session_id: sessionId })
         });
 
         const reader = response.body.getReader();
