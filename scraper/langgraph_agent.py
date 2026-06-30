@@ -15,6 +15,7 @@
 # - Custom middleware or hooks
 
 import os
+import uuid
 import operator
 from typing import TypedDict, Annotated, Sequence, List, Dict, Any
 from dotenv import load_dotenv
@@ -25,9 +26,11 @@ from langchain_core.messages import (
     AIMessage,
     ToolMessage,
     SystemMessage,
+    RemoveMessage,
 )
 from langchain_openai import ChatOpenAI
 from langgraph.graph import StateGraph, END
+from langgraph.graph.message import add_messages
 from langgraph.checkpoint.memory import MemorySaver
 
 # Import tools from agent.py to avoid duplication
@@ -72,15 +75,12 @@ _setup_tracing()
 # -------------------------------------------------------------------
 
 class CustomAgentState(TypedDict):
-    """Custom state that tracks additional information beyond messages.
-
-    This is the advantage of building a custom workflow - you can track
-    whatever state you need throughout the agent's execution.
-    """
-    messages: Annotated[Sequence[BaseMessage], operator.add]
-    sources: List[Dict[str, Any]]  # Track sources used
-    iteration_count: int  # Track number of iterations
-    tools_used: List[str]  # Track which tools were used
+    """Custom state that tracks additional information beyond messages."""
+    messages: Annotated[Sequence[BaseMessage], add_messages]
+    sources: List[Dict[str, Any]]
+    iteration_count: int
+    tools_used: List[str]
+    summary: str  # rolling summary of earlier turns; injected into system prompt
 
 
 # -------------------------------------------------------------------
@@ -112,24 +112,27 @@ tool_map = {
 # Graph Node Functions
 # -------------------------------------------------------------------
 
+_SUMMARIZE_AFTER_TURNS = int(os.getenv("SUMMARIZE_AFTER_TURNS", "4"))
+
+
 def should_continue(state: CustomAgentState) -> str:
-    """Decide whether to continue executing tools or end the workflow.
+    """Route: continue to tools, trigger summarization, or end."""
+    last_message = state["messages"][-1]
 
-    This is where you can add custom routing logic, e.g.:
-    - Limit iterations: if state["iteration_count"] > 5: return "end"
-    - Require certain tools: if "search_local_knowledge" not in state["tools_used"]: ...
-    """
-    messages = state["messages"]
-    last_message = messages[-1]
-
-    # Check iteration limit (custom logic example)
     if state.get("iteration_count", 0) > 10:
-        return "end"
+        return _route_end_or_summarize(state)
 
-    # If LLM decided to use a tool, continue
     if hasattr(last_message, "tool_calls") and last_message.tool_calls:
         return "continue"
 
+    return _route_end_or_summarize(state)
+
+
+def _route_end_or_summarize(state: CustomAgentState) -> str:
+    """After the agent gives a final answer, check if we should summarize."""
+    human_count = sum(1 for m in state["messages"] if isinstance(m, HumanMessage))
+    if human_count >= _SUMMARIZE_AFTER_TURNS:
+        return "summarize"
     return "end"
 
 
@@ -137,20 +140,27 @@ def call_model(state: CustomAgentState) -> Dict[str, Any]:
     """Call the LLM to decide the next action or generate final response."""
     messages = list(state["messages"])
 
-    # Ensure system message is at the beginning
-    if not messages or not isinstance(messages[0], SystemMessage):
-        messages = [SystemMessage(content=SYSTEM_PROMPT)] + messages
+    # Build system prompt — prepend rolling summary when present
+    system_content = SYSTEM_PROMPT
+    summary = state.get("summary", "")
+    if summary:
+        system_content += (
+            "\n\n## Earlier Conversation Summary\n"
+            "The following is a summary of earlier turns that have been condensed:\n"
+            + summary
+        )
 
-    # Bind tools and invoke
+    if not messages or not isinstance(messages[0], SystemMessage):
+        messages = [SystemMessage(content=system_content)] + messages
+    else:
+        messages[0] = SystemMessage(content=system_content)
+
     model_with_tools = llm.bind_tools(tools)
     response = model_with_tools.invoke(messages)
 
-    # Increment iteration count
-    new_iteration = state.get("iteration_count", 0) + 1
-
     return {
         "messages": [response],
-        "iteration_count": new_iteration,
+        "iteration_count": state.get("iteration_count", 0) + 1,
     }
 
 
@@ -203,6 +213,63 @@ def call_tool(state: CustomAgentState) -> Dict[str, Any]:
     }
 
 
+def summarize_conversation(state: CustomAgentState) -> Dict[str, Any]:
+    """Summarize all turns up to (but not including) the most recent one.
+
+    Keeps messages from the last HumanMessage onwards intact; everything
+    before that is summarized and then deleted via RemoveMessage.
+    The summary is cumulative: if a prior summary exists it is incorporated.
+    """
+    messages = list(state["messages"])
+    existing_summary = state.get("summary", "")
+
+    # Find the start of the current (most recent) turn
+    last_human_idx = max(
+        (i for i, m in enumerate(messages) if isinstance(m, HumanMessage)),
+        default=len(messages),
+    )
+    to_summarize = messages[:last_human_idx]
+
+    if not to_summarize:
+        return {}  # Nothing old enough to summarize yet
+
+    # Build readable transcript of the messages being summarized
+    lines = []
+    for m in to_summarize:
+        role = type(m).__name__.replace("Message", "")
+        content = m.content if isinstance(m.content, str) else str(m.content)
+        if content:
+            lines.append(f"{role}: {content[:800]}")  # cap each message at 800 chars
+
+    transcript = "\n".join(lines)
+
+    if existing_summary:
+        prompt = (
+            f"Previous summary:\n{existing_summary}\n\n"
+            f"New messages to incorporate into the summary:\n{transcript}\n\n"
+            "Update the summary to include all important facts, names, context, "
+            "and decisions from both the previous summary and the new messages. "
+            "Be concise but complete."
+        )
+    else:
+        prompt = (
+            f"Summarize the following conversation, capturing all important facts, "
+            f"names, context, and decisions:\n\n{transcript}\n\n"
+            "Be concise but complete."
+        )
+
+    response = llm.invoke([HumanMessage(content=prompt)])
+    new_summary = response.content
+
+    # Delete all the messages we just summarized
+    removals = [RemoveMessage(id=m.id) for m in to_summarize]
+
+    return {
+        "summary": new_summary,
+        "messages": removals,
+    }
+
+
 # -------------------------------------------------------------------
 # Build the Graph Workflow
 # -------------------------------------------------------------------
@@ -220,27 +287,25 @@ def build_custom_workflow(checkpointer=None):
     """
     workflow = StateGraph(CustomAgentState)
 
-    # Add nodes
     workflow.add_node("agent", call_model)
     workflow.add_node("tools", call_tool)
+    workflow.add_node("summarize", summarize_conversation)
 
-    # Set entry point
     workflow.set_entry_point("agent")
 
-    # Add conditional routing
     workflow.add_conditional_edges(
         "agent",
         should_continue,
         {
             "continue": "tools",
+            "summarize": "summarize",
             "end": END,
         }
     )
 
-    # Loop back from tools to agent
     workflow.add_edge("tools", "agent")
+    workflow.add_edge("summarize", END)
 
-    # Compile
     return workflow.compile(checkpointer=checkpointer)
 
 
@@ -328,11 +393,14 @@ class CustomWorkflowWrapper:
         self.has_memory = checkpointer is not None
 
     def _build_config(self, config: Dict[str, Any], session_id: str) -> Dict[str, Any]:
-        if self.has_memory and session_id and "configurable" not in (config or {}):
-            return {"configurable": {"thread_id": session_id}}
+        if self.has_memory:
+            # checkpointer always needs thread_id; fall back to random UUID if none provided
+            return {"configurable": {"thread_id": session_id or str(uuid.uuid4())}}
         return config or {}
 
     def _build_inputs(self, query: str) -> Dict[str, Any]:
+        # summary is intentionally omitted: the checkpointer carries it across turns.
+        # Resetting it here would wipe the accumulated summary on every request.
         return {
             "messages": [HumanMessage(content=query)],
             "sources": [],
