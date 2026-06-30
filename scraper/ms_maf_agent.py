@@ -36,13 +36,13 @@ def _setup_tracing() -> None:
     so we strip the path before handing it to configure_otel_providers().
     No-op when the env var is absent.
     """
-    endpoint = os.getenv("PHOENIX_COLLECTOR_ENDPOINT")
+    endpoint = os.getenv("PHOENIX_COLLECTOR_ENDPOINT")  # http://localhost:6006/v1/traces
     if not endpoint:
         return
-    from urllib.parse import urlparse
-    parsed = urlparse(endpoint)
-    base_url = f"{parsed.scheme}://{parsed.netloc}"
-    os.environ.setdefault("OTEL_EXPORTER_OTLP_ENDPOINT", base_url)
+    # Use the traces-specific env var so MAF only creates a trace exporter.
+    # OTEL_EXPORTER_OTLP_ENDPOINT would create metrics+logs exporters too,
+    # causing 405 errors because Phoenix only accepts /v1/traces.
+    os.environ.setdefault("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT", endpoint)
     os.environ.setdefault("OTEL_EXPORTER_OTLP_PROTOCOL", "http/protobuf")
     from agent_framework.observability import configure_otel_providers
     configure_otel_providers(enable_sensitive_data=True)
