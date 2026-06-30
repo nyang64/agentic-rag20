@@ -224,24 +224,43 @@ def _augment_with_local(question: str) -> str:
         return question
 
 
+def _get_tracer():
+    from opentelemetry import trace
+    return trace.get_tracer(__name__)
+
+
 async def aquery_agent(question: str) -> Dict[str, Any]:
     """Run the MAF agent to completion and return the final answer."""
     augmented = _augment_with_local(question) if _needs_local_search(question) else question
-    agent = _build_agent()
-    response = await agent.run(augmented)
-    return {"answer": response.text or "", "tools_used": []}
+    with _get_tracer().start_as_current_span("maf_agent") as span:
+        span.set_attribute("openinference.span.kind", "AGENT")
+        span.set_attribute("input.value", question)
+        span.set_attribute("input.mime_type", "text/plain")
+        agent = _build_agent()
+        response = await agent.run(augmented)
+        answer = response.text or ""
+        span.set_attribute("output.value", answer)
+        span.set_attribute("output.mime_type", "text/plain")
+    return {"answer": answer, "tools_used": []}
 
 
 async def astream_agent_events(question: str):
     """Async generator yielding text chunks as the MAF agent runs."""
     augmented = _augment_with_local(question) if _needs_local_search(question) else question
-    agent = _build_agent()
-    # stream=True returns ResponseStream directly (not Awaitable) — no await here
-    stream = agent.run(augmented, stream=True)
-    async for update in stream:
-        text = update.text
-        if text:
-            yield text
+    with _get_tracer().start_as_current_span("maf_agent") as span:
+        span.set_attribute("openinference.span.kind", "AGENT")
+        span.set_attribute("input.value", question)
+        span.set_attribute("input.mime_type", "text/plain")
+        agent = _build_agent()
+        stream = agent.run(augmented, stream=True)
+        answer_parts = []
+        async for update in stream:
+            text = update.text
+            if text:
+                answer_parts.append(text)
+                yield text
+        span.set_attribute("output.value", "".join(answer_parts))
+        span.set_attribute("output.mime_type", "text/plain")
 
 
 def query_agent(question: str) -> Dict[str, Any]:
