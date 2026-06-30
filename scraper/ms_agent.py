@@ -28,19 +28,16 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 SYSTEM_PROMPT = """You are an intelligent research assistant with access to three tools:
 
-1. web_search              - Search the web for current events, news, and real-time facts
+1. web_search              - Search the web and returns page content from the top result
 2. fetch_webpage           - Retrieve full text content from a specific URL
 3. search_local_knowledge  - Query the local pgvector knowledge base of scraped content
 
 Instructions:
-- For current events, weather, stock prices, or any real-time facts:
-  STEP 1 — call web_search to find relevant URLs
-  STEP 2 — call fetch_webpage on the most relevant URL to get the actual current data
-  NEVER return just a URL as your answer — always fetch it and extract the real information.
+- For current events, weather, or real-time facts: use web_search (it fetches page content automatically)
+- To dig deeper into a specific URL: use fetch_webpage
 - For domain-specific queries about scraped content: use search_local_knowledge
 - Always cite sources with URLs when available
-- If information is unavailable after fetching, say so clearly
-- Synthesize information from multiple sources when helpful
+- Never return just a URL — always extract and present the actual information
 
 After your main answer, add a Sources section listing URLs used."""
 
@@ -50,8 +47,14 @@ After your main answer, add a Sources section listing URLs used."""
 # ---------------------------------------------------------------------------
 
 async def web_search(query: str) -> str:
-    """Search the web for current information using DuckDuckGo."""
+    """Search the web for current information using DuckDuckGo.
+
+    Automatically fetches the top result's page content so the caller gets
+    real data, not just a list of URLs to follow up on.
+    """
     try:
+        import requests
+        from bs4 import BeautifulSoup
         from ddgs import DDGS
 
         def _search():
@@ -59,14 +62,34 @@ async def web_search(query: str) -> str:
                 hits = list(ddgs.text(query, max_results=5))
             if not hits:
                 return "No search results found."
-            parts = []
+
+            # Snippets for all results
+            snippets = []
             for r in hits:
-                parts.append(
+                snippets.append(
                     f"Title: {r.get('title', '')}\n"
                     f"Snippet: {r.get('body', '')}\n"
                     f"URL: {r.get('href', '')}\n"
                 )
-            return "\n".join(parts)
+
+            # Auto-fetch top result so the LLM gets actual page content
+            top_url = hits[0].get("href", "")
+            fetched = ""
+            if top_url:
+                try:
+                    headers = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"}
+                    resp = requests.get(top_url, headers=headers, timeout=8)
+                    soup = BeautifulSoup(resp.text, "html.parser")
+                    for el in soup(["script", "style", "nav", "footer", "header"]):
+                        el.decompose()
+                    fetched = soup.get_text(" ", strip=True)[:2000]
+                except Exception:
+                    pass  # fall back to snippets only
+
+            result = "Search Results:\n" + "\n".join(snippets)
+            if fetched:
+                result += f"\n\nPage content from {top_url}:\n{fetched}"
+            return result
 
         loop = asyncio.get_event_loop()
         return await loop.run_in_executor(None, _search)
