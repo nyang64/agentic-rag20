@@ -14,7 +14,12 @@ langchain-openai==1.0.1
 langchain-text-splitters==1.1.2
 langgraph==1.0.2
 langgraph-checkpoint==3.0.0
+langgraph-prebuilt==1.0.2
 langsmith==0.4.39
+
+# ── NumPy/SciPy — torch 2.2.2 built against numpy 1.x ─────────
+numpy<2
+scipy<1.14
 
 # ── OpenAI-compatible client (OpenRouter) ─────────────────────
 openai==2.6.1
@@ -38,6 +43,13 @@ beautifulsoup4==4.14.2
 requests==2.32.5
 lxml==6.0.2
 playwright==1.55.0
+
+# ── OpenTelemetry + OpenInference → Phoenix tracing ───────────
+# Replaces LangSmith; zero agent-code changes via LangChainInstrumentor
+opentelemetry-api
+opentelemetry-sdk
+opentelemetry-exporter-otlp-proto-http
+openinference-instrumentation-langchain
 
 # ── Utilities ─────────────────────────────────────────────────
 python-dotenv==1.2.1

@@ -42,6 +42,31 @@ from scraper.agent import (
 load_dotenv()
 
 
+def _setup_tracing() -> None:
+    """Wire LangChain/LangGraph OTel instrumentation to a local Phoenix collector.
+
+    Uses the same PHOENIX_COLLECTOR_ENDPOINT env var as the llamaindex branch.
+    LangChainInstrumentor patches LangChain's global callback system so every
+    chain, LLM call, and tool invocation is captured automatically — no agent
+    code changes needed.  No-op when the env var is absent.
+    """
+    endpoint = os.getenv("PHOENIX_COLLECTOR_ENDPOINT")
+    if not endpoint:
+        return
+    from opentelemetry import trace
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import BatchSpanProcessor
+    from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+    from openinference.instrumentation.langchain import LangChainInstrumentor
+    provider = TracerProvider()
+    provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter(endpoint=endpoint)))
+    trace.set_tracer_provider(provider)
+    LangChainInstrumentor().instrument(tracer_provider=provider)
+
+
+_setup_tracing()
+
+
 # -------------------------------------------------------------------
 # Custom Agent State (extends beyond just messages)
 # -------------------------------------------------------------------
