@@ -13,11 +13,16 @@ Three tools mirror the LangGraph implementation:
 """
 
 import os
-from typing import Dict, Any
+import json
+import psycopg2
+from typing import Dict, Any, List, Optional
 from dotenv import load_dotenv
 
 from llama_index.core.tools import FunctionTool
 from llama_index.core.agent import ReActAgent, AgentOutput, ToolCall, ToolCallResult
+from llama_index.core.memory import ChatSummaryMemoryBuffer
+from llama_index.core.storage.chat_store import BaseChatStore
+from llama_index.core.base.llms.types import ChatMessage
 from llama_index.llms.openai import OpenAI as LlamaOpenAI
 from llama_index.llms.openai.utils import ALL_AVAILABLE_MODELS
 
@@ -187,6 +192,132 @@ _TOOLS = [web_search_tool, fetch_webpage_tool, search_local_knowledge_tool]
 
 
 # ---------------------------------------------------------------------------
+# PostgreSQL-backed chat store for persistent conversation memory
+# ---------------------------------------------------------------------------
+
+_TABLE = "llamaindex_chat_sessions"
+
+
+class PostgresChatStore(BaseChatStore):
+    """Persists LlamaIndex chat history in a PostgreSQL JSONB column."""
+
+    db_url: str
+
+    @classmethod
+    def class_name(cls) -> str:
+        return "PostgresChatStore"
+
+    def _conn(self):
+        return psycopg2.connect(self.db_url)
+
+    @staticmethod
+    def _serialize(messages: List[ChatMessage]) -> str:
+        return json.dumps([m.model_dump(mode="json") for m in messages])
+
+    @staticmethod
+    def _text_from_blocks(blocks) -> str:
+        """Extract plain text from LlamaIndex 0.14 blocks format."""
+        parts = []
+        for b in blocks or []:
+            text = b.get("text") if isinstance(b, dict) else getattr(b, "text", None)
+            if text:
+                parts.append(text)
+        return " ".join(parts)
+
+    @classmethod
+    def _deserialize(cls, rows) -> List[ChatMessage]:
+        messages = [ChatMessage.model_validate(m) for m in rows]
+        # LlamaIndex 0.14 stores content in `blocks`; ChatSummaryMemoryBuffer
+        # counts tokens via m.content, so backfill it here.
+        for msg in messages:
+            if not msg.content:
+                raw = msg.model_dump(mode="json").get("blocks") or []
+                msg.content = cls._text_from_blocks(raw)
+        return messages
+
+    def set_messages(self, key: str, messages: List[ChatMessage]) -> None:
+        data = self._serialize(messages)
+        with self._conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""INSERT INTO {_TABLE} (session_id, messages, updated_at)
+                        VALUES (%s, %s::jsonb, NOW())
+                        ON CONFLICT (session_id)
+                        DO UPDATE SET messages=%s::jsonb, updated_at=NOW()""",
+                    (key, data, data),
+                )
+            conn.commit()
+
+    def get_messages(self, key: str) -> List[ChatMessage]:
+        with self._conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(f"SELECT messages FROM {_TABLE} WHERE session_id=%s", (key,))
+                row = cur.fetchone()
+        return self._deserialize(row[0]) if row else []
+
+    def add_message(self, key: str, message: ChatMessage, idx: Optional[int] = None) -> None:
+        msgs = self.get_messages(key)
+        if idx is None:
+            msgs.append(message)
+        else:
+            msgs.insert(idx, message)
+        self.set_messages(key, msgs)
+
+    def delete_messages(self, key: str) -> Optional[List[ChatMessage]]:
+        msgs = self.get_messages(key)
+        self.set_messages(key, [])
+        return msgs
+
+    def delete_message(self, key: str, idx: int) -> Optional[ChatMessage]:
+        msgs = self.get_messages(key)
+        if idx >= len(msgs):
+            return None
+        removed = msgs.pop(idx)
+        self.set_messages(key, msgs)
+        return removed
+
+    def delete_last_message(self, key: str) -> Optional[ChatMessage]:
+        msgs = self.get_messages(key)
+        if not msgs:
+            return None
+        last = msgs.pop()
+        self.set_messages(key, msgs)
+        return last
+
+    def get_keys(self) -> List[str]:
+        with self._conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(f"SELECT session_id FROM {_TABLE}")
+                return [r[0] for r in cur.fetchall()]
+
+
+def create_sessions_table(db_url: str) -> None:
+    """Create the chat sessions table if it doesn't exist (called once at startup)."""
+    with psycopg2.connect(db_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(f"""
+                CREATE TABLE IF NOT EXISTS {_TABLE} (
+                    session_id TEXT PRIMARY KEY,
+                    messages   JSONB NOT NULL DEFAULT '[]',
+                    updated_at TIMESTAMPTZ DEFAULT NOW()
+                )
+            """)
+        conn.commit()
+
+
+def get_memory(session_id: str, db_url: str) -> ChatSummaryMemoryBuffer:
+    """Return a ChatSummaryMemoryBuffer backed by PostgreSQL for this session."""
+    token_limit = int(os.getenv("SUMMARIZE_TOKEN_LIMIT", "2000"))
+    store = PostgresChatStore(db_url=db_url)
+    return ChatSummaryMemoryBuffer.from_defaults(
+        llm=_build_llm(),
+        token_limit=token_limit,
+        chat_store=store,
+        chat_store_key=session_id,
+    )
+
+
+# ---------------------------------------------------------------------------
 # LLM (OpenRouter — OpenAI-compatible endpoint)
 # ---------------------------------------------------------------------------
 
@@ -227,10 +358,12 @@ def get_agent() -> ReActAgent:
 # Public query interface
 # ---------------------------------------------------------------------------
 
-async def aquery_agent(question: str) -> Dict[str, Any]:
+async def aquery_agent(question: str, session_id: str = "") -> Dict[str, Any]:
     """Run the agent and return the final answer."""
     agent = get_agent()
-    handler = agent.run(user_msg=question)
+    db_url = os.getenv("PGVECTOR_DB_URL", "")
+    memory = get_memory(session_id, db_url) if session_id and db_url else None
+    handler = agent.run(user_msg=question, memory=memory)
     result: AgentOutput = await handler
     return {
         "answer": result.response.content if result.response else "",
@@ -238,13 +371,12 @@ async def aquery_agent(question: str) -> Dict[str, Any]:
     }
 
 
-async def astream_agent_events(question: str):
-    """
-    Async generator that yields human-readable strings as the agent runs.
-    Yields tool call notifications followed by the final answer.
-    """
+async def astream_agent_events(question: str, session_id: str = ""):
+    """Async generator that yields human-readable strings as the agent runs."""
     agent = get_agent()
-    handler = agent.run(user_msg=question)
+    db_url = os.getenv("PGVECTOR_DB_URL", "")
+    memory = get_memory(session_id, db_url) if session_id and db_url else None
+    handler = agent.run(user_msg=question, memory=memory)
 
     async for event in handler.stream_events():
         if isinstance(event, ToolCall):
@@ -262,6 +394,8 @@ __all__ = [
     "get_agent",
     "aquery_agent",
     "astream_agent_events",
+    "create_sessions_table",
+    "get_memory",
     "web_search_tool",
     "fetch_webpage_tool",
     "search_local_knowledge_tool",
