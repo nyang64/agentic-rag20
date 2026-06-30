@@ -33,11 +33,13 @@ SYSTEM_PROMPT = """You are an intelligent research assistant with access to thre
 3. search_local_knowledge  - Query the local pgvector knowledge base of scraped content
 
 Instructions:
-- For current events, weather, or recent facts: use web_search first
-- To get full details from a URL: use fetch_webpage
+- For current events, weather, stock prices, or any real-time facts:
+  STEP 1 — call web_search to find relevant URLs
+  STEP 2 — call fetch_webpage on the most relevant URL to get the actual current data
+  NEVER return just a URL as your answer — always fetch it and extract the real information.
 - For domain-specific queries about scraped content: use search_local_knowledge
 - Always cite sources with URLs when available
-- If information is unavailable, say so clearly
+- If information is unavailable after fetching, say so clearly
 - Synthesize information from multiple sources when helpful
 
 After your main answer, add a Sources section listing URLs used."""
@@ -162,17 +164,20 @@ async def aquery_agent(question: str) -> Dict[str, Any]:
 
     for msg in result.messages:
         cls = type(msg).__name__
-        # Final text response from the agent
-        if cls == "TextMessage" and getattr(msg, "source", "") not in ("user", ""):
-            answer = msg.content
-        # Track tool calls (ToolCallRequestEvent has a list of FunctionCall objects)
+        # TextMessage = final answer when reflect_on_tool_use generates a new LLM response
+        # ToolCallSummaryMessage = final answer when reflect_on_tool_use summarises tool output
+        # Both carry the synthesised answer as a plain string in .content
+        if cls in ("TextMessage", "ToolCallSummaryMessage") and getattr(msg, "source", "") not in ("user", ""):
+            if hasattr(msg, "content") and isinstance(msg.content, str):
+                answer = msg.content
+        # Track tool calls
         if "ToolCallRequest" in cls and hasattr(msg, "content"):
             for call in msg.content:
                 name = getattr(call, "name", "")
                 if name and name not in tools_used:
                     tools_used.append(name)
 
-    # Fallback: use the last message if we didn't find a TextMessage
+    # Last-resort fallback: use the final message whatever its type
     if not answer and result.messages:
         last = result.messages[-1]
         if hasattr(last, "content") and isinstance(last.content, str):
@@ -205,8 +210,9 @@ async def astream_agent_events(question: str):
                 preview = str(getattr(result, "content", result))[:300]
                 yield f"[Result]: {preview}...\n\n"
 
-        elif cls == "TextMessage" and getattr(event, "source", "") not in ("user", ""):
-            yield f"\n{event.content}"
+        elif cls in ("TextMessage", "ToolCallSummaryMessage") and getattr(event, "source", "") not in ("user", ""):
+            if hasattr(event, "content") and isinstance(event.content, str):
+                yield f"\n{event.content}"
 
         elif cls == "TaskResult":
             break
