@@ -15,12 +15,12 @@ from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
 
-from scraper.llamaindex_agent import aquery_agent, astream_agent_events
+from scraper.ms_agent import aquery_agent, astream_agent_events
 
 load_dotenv()
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
-app = FastAPI(title="Agentic RAG — LlamaIndex")
+app = FastAPI(title="Agentic RAG — AutoGen")
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 

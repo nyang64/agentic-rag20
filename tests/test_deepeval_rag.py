@@ -336,10 +336,10 @@ class TestIntegration:
         assert_test(case, metrics)
 
     @pytest.mark.flaky(reruns=2)
-    def test_llamaindex_agent_local_knowledge(self, eval_llm):
-        """LlamaIndex agent should use search_local_knowledge to answer a travel question."""
+    def test_ms_agent_local_knowledge(self, eval_llm):
+        """AutoGen agent should use search_local_knowledge to answer a travel question."""
         import asyncio
-        from scraper.llamaindex_agent import aquery_agent
+        from scraper.ms_agent import aquery_agent
 
         question = "What should I know about visiting Haikou as a tourist?"
         result = asyncio.run(aquery_agent(question))
