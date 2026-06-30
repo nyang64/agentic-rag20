@@ -105,7 +105,7 @@
       queryInput.value = '';
 
       try {
-        const response = await fetch('/ask', {
+        const response = await fetch('/ask_streaming', {
           method: 'POST',
           headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
           body: new URLSearchParams({ query })

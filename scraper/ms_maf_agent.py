@@ -28,20 +28,21 @@ load_dotenv()
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 
-SYSTEM_PROMPT = """You are an intelligent research assistant with access to three tools:
+SYSTEM_PROMPT = """You are an intelligent research assistant. You have EXACTLY three tools available — no others:
 
-1. web_search              - Search the web and returns page content from the top result
-2. fetch_webpage           - Retrieve full text content from a specific URL
-3. search_local_knowledge  - Query the local pgvector knowledge base of scraped content
+1. web_search(query)             - Search the web; returns snippet + page content from top result
+2. fetch_webpage(url)            - Retrieve full text of a specific URL
+3. search_local_knowledge(query) - Query the local pgvector knowledge base of scraped website content
 
-Instructions:
-- For current events, weather, or real-time facts: use web_search (it fetches page content automatically)
-- To dig deeper into a specific URL: use fetch_webpage
-- For domain-specific queries about scraped content: use search_local_knowledge
-- Always cite sources with URLs when available
-- Never return just a URL — always extract and present the actual information
+TOOL SELECTION RULES (follow strictly):
+- User asks about "local knowledge", "knowledge base", or content from a specific website → call search_local_knowledge FIRST
+- User asks about current events, weather, news, or real-time data → call web_search
+- User provides a URL to read → call fetch_webpage
+- Never call a tool that is not in this list (web_search, fetch_webpage, search_local_knowledge)
+- Never say you are "ready to use" tools — always call the right tool immediately
 
-After your main answer, add a Sources section listing URLs used."""
+After using a tool, synthesize its output into a direct, informative answer.
+Always cite sources with URLs when available."""
 
 
 # ---------------------------------------------------------------------------
@@ -171,23 +172,49 @@ def _build_agent() -> Agent:
 # Public query interface
 # ---------------------------------------------------------------------------
 
+_LOCAL_KEYWORDS = ("local knowledge", "knowledge base", "local kb", "scraped")
+
+
+def _needs_local_search(question: str) -> bool:
+    q = question.lower()
+    return any(kw in q for kw in _LOCAL_KEYWORDS)
+
+
+def _augment_with_local(question: str) -> str:
+    """Pre-fetch local KB results and embed them in the prompt so free models always see them."""
+    try:
+        from scraper.raq_query import retrieve_top3, format_docs
+        docs = retrieve_top3(question)
+        if not docs:
+            return question
+        context = format_docs(docs)
+        sources = "\n".join(
+            f"- {d.metadata.get('url', '')} ({d.metadata.get('title', '')})"
+            for d in docs
+        )
+        return (
+            f"{question}\n\n"
+            f"[Local knowledge base results for your reference:]\n{context}\n\n"
+            f"[Sources:]\n{sources}"
+        )
+    except Exception:
+        return question
+
+
 async def aquery_agent(question: str) -> Dict[str, Any]:
     """Run the MAF agent to completion and return the final answer."""
+    augmented = _augment_with_local(question) if _needs_local_search(question) else question
     agent = _build_agent()
-    response = await agent.run(question)
+    response = await agent.run(augmented)
     return {"answer": response.text or "", "tools_used": []}
 
 
 async def astream_agent_events(question: str):
-    """
-    Async generator that yields text chunks as the MAF agent runs.
-
-    MAF's ResponseStream is a plain AsyncIterable[AgentResponseUpdate].
-    Each update's .text property returns the text content of that chunk.
-    """
+    """Async generator yielding text chunks as the MAF agent runs."""
+    augmented = _augment_with_local(question) if _needs_local_search(question) else question
     agent = _build_agent()
     # stream=True returns ResponseStream directly (not Awaitable) — no await here
-    stream = agent.run(question, stream=True)
+    stream = agent.run(augmented, stream=True)
     async for update in stream:
         text = update.text
         if text:
