@@ -28,6 +28,29 @@ load_dotenv()
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 
+def _setup_tracing() -> None:
+    """Wire MAF's native OTel instrumentation to a Phoenix collector.
+
+    Reuses the same PHOENIX_COLLECTOR_ENDPOINT env var as the llamaindex branch.
+    MAF expects OTEL_EXPORTER_OTLP_ENDPOINT as the base URL (without /v1/traces),
+    so we strip the path before handing it to configure_otel_providers().
+    No-op when the env var is absent.
+    """
+    endpoint = os.getenv("PHOENIX_COLLECTOR_ENDPOINT")
+    if not endpoint:
+        return
+    from urllib.parse import urlparse
+    parsed = urlparse(endpoint)
+    base_url = f"{parsed.scheme}://{parsed.netloc}"
+    os.environ.setdefault("OTEL_EXPORTER_OTLP_ENDPOINT", base_url)
+    os.environ.setdefault("OTEL_EXPORTER_OTLP_PROTOCOL", "http/protobuf")
+    from agent_framework.observability import configure_otel_providers
+    configure_otel_providers(enable_sensitive_data=True)
+
+
+_setup_tracing()
+
+
 SYSTEM_PROMPT = """You are an intelligent research assistant. You have EXACTLY three tools available — no others:
 
 1. web_search(query)             - Search the web; returns snippet + page content from top result
