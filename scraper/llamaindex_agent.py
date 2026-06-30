@@ -21,6 +21,35 @@ from llama_index.core.agent import ReActAgent, AgentOutput, ToolCall, ToolCallRe
 from llama_index.llms.openai import OpenAI as LlamaOpenAI
 from llama_index.llms.openai.utils import ALL_AVAILABLE_MODELS
 
+load_dotenv()
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
+
+def _setup_tracing() -> None:
+    """Configure OTel → Phoenix tracing if PHOENIX_COLLECTOR_ENDPOINT is set.
+
+    Mirrors the LangSmith pattern: env var present = tracing on, absent = zero overhead.
+    Safe to call multiple times (OTel SDK ignores duplicate provider registration).
+    """
+    endpoint = os.getenv("PHOENIX_COLLECTOR_ENDPOINT")
+    if not endpoint:
+        return
+
+    from opentelemetry import trace
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import BatchSpanProcessor
+    from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+    from openinference.instrumentation.llama_index import LlamaIndexInstrumentor
+
+    provider = TracerProvider()
+    provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter(endpoint=endpoint)))
+    trace.set_tracer_provider(provider)
+    LlamaIndexInstrumentor().instrument(tracer_provider=provider)
+
+
+_setup_tracing()
+
+
 # Register OpenRouter model names so LlamaIndex can resolve their context window.
 # LlamaIndex's OpenAI class validates model names against a hardcoded dict;
 # OpenRouter uses namespaced names like "provider/model:tier" that aren't in that list.
@@ -34,9 +63,6 @@ _OPENROUTER_MODELS = {
     "google/gemma-3-27b-it:free": 8192,
 }
 ALL_AVAILABLE_MODELS.update(_OPENROUTER_MODELS)
-
-load_dotenv()
-os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 
 SYSTEM_PROMPT = """You are an intelligent research assistant with access to three tools:

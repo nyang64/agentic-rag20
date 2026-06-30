@@ -136,6 +136,9 @@ dependencies = [
     "llama-index-core==0.14.23",
     "llama-index-llms-openai==0.7.9",
     "llama-index-embeddings-huggingface==0.7.0",
+    "arize-phoenix",
+    "openinference-instrumentation-llama-index",
+    "opentelemetry-exporter-otlp-proto-http",
 ]
 
 [tool.setuptools.packages.find]
