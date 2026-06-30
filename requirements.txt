@@ -13,7 +13,8 @@ langchain-core==1.4.8
 langchain-openai==1.0.1
 langchain-text-splitters==1.1.2
 langgraph==1.0.2
-langgraph-checkpoint==3.0.0
+langgraph-checkpoint==2.1.2
+langgraph-checkpoint-postgres==2.0.25
 langgraph-prebuilt==1.0.2
 langsmith==0.4.39
 
@@ -36,6 +37,8 @@ einops
 
 # ── PostgreSQL + pgvector ──────────────────────────────────────
 psycopg2-binary==2.9.11
+psycopg[binary]>=3.2        # psycopg3 required by AsyncPostgresSaver
+psycopg-pool>=3.2           # async connection pool for checkpointer
 pgvector==0.3.6
 
 # ── Web scraping (content ingestion) ──────────────────────────

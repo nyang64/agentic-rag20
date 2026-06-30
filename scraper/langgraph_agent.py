@@ -292,81 +292,77 @@ def query_custom_agent(question: str, thread_id: str = None) -> Dict[str, Any]:
 # Wrapper for web_app.py compatibility
 # -------------------------------------------------------------------
 
+def _extract_output(result: Dict[str, Any]) -> Dict[str, Any]:
+    """Extract AgentExecutor-style output from a graph result dict."""
+    output = ""
+    intermediate_steps = []
+    for msg in result["messages"]:
+        if isinstance(msg, AIMessage):
+            if hasattr(msg, "tool_calls") and msg.tool_calls:
+                for tc in msg.tool_calls:
+                    class Action:
+                        def __init__(self, tool, tool_input):
+                            self.tool = tool
+                            self.tool_input = tool_input
+                    intermediate_steps.append((Action(tc.get("name", ""), tc.get("args", {})), ""))
+            else:
+                output = msg.content
+        elif isinstance(msg, ToolMessage):
+            if intermediate_steps:
+                action, _ = intermediate_steps[-1]
+                intermediate_steps[-1] = (action, msg.content)
+    return {
+        "output": output,
+        "intermediate_steps": intermediate_steps,
+        "sources": result.get("sources", []),
+        "tools_used": result.get("tools_used", []),
+        "iteration_count": result.get("iteration_count", 0),
+    }
+
+
 class CustomWorkflowWrapper:
     """Wrapper that provides AgentExecutor-like interface for the custom workflow."""
 
-    def __init__(self, use_memory: bool = False):
-        checkpointer = MemorySaver() if use_memory else None
+    def __init__(self, checkpointer=None):
         self.workflow = build_custom_workflow(checkpointer=checkpointer)
-        self.use_memory = use_memory
-        self._thread_counter = 0
+        self.has_memory = checkpointer is not None
 
-    def invoke(self, inputs: Dict[str, Any], config: Dict[str, Any] = None) -> Dict[str, Any]:
-        """Invoke with AgentExecutor-compatible interface."""
-        query = inputs.get("input", "")
+    def _build_config(self, config: Dict[str, Any], session_id: str) -> Dict[str, Any]:
+        if self.has_memory and session_id and "configurable" not in (config or {}):
+            return {"configurable": {"thread_id": session_id}}
+        return config or {}
 
-        workflow_inputs = {
-            "messages": [HumanMessage(content=query)],
-            "sources": [],
-            "iteration_count": 0,
-            "tools_used": [],
-        }
-
-        invoke_config = config or {}
-        if self.use_memory and "configurable" not in invoke_config:
-            self._thread_counter += 1
-            invoke_config = {"configurable": {"thread_id": f"thread_{self._thread_counter}"}}
-
-        result = self.workflow.invoke(workflow_inputs, invoke_config)
-
-        # Extract output and intermediate steps
-        output = ""
-        intermediate_steps = []
-
-        for msg in result["messages"]:
-            if isinstance(msg, AIMessage):
-                if hasattr(msg, "tool_calls") and msg.tool_calls:
-                    for tc in msg.tool_calls:
-                        class Action:
-                            def __init__(self, tool, tool_input):
-                                self.tool = tool
-                                self.tool_input = tool_input
-                        intermediate_steps.append((
-                            Action(tc.get("name", ""), tc.get("args", {})),
-                            ""
-                        ))
-                else:
-                    output = msg.content
-            elif isinstance(msg, ToolMessage):
-                if intermediate_steps:
-                    action, _ = intermediate_steps[-1]
-                    intermediate_steps[-1] = (action, msg.content)
-
+    def _build_inputs(self, query: str) -> Dict[str, Any]:
         return {
-            "output": output,
-            "intermediate_steps": intermediate_steps,
-            "sources": result.get("sources", []),
-            "tools_used": result.get("tools_used", []),
-            "iteration_count": result.get("iteration_count", 0),
-        }
-
-    async def astream(self, inputs: Dict[str, Any], config: Dict[str, Any] = None):
-        """Async stream the workflow's execution."""
-        query = inputs.get("input", "")
-
-        workflow_inputs = {
             "messages": [HumanMessage(content=query)],
             "sources": [],
             "iteration_count": 0,
             "tools_used": [],
         }
 
-        invoke_config = config or {}
-        if self.use_memory and "configurable" not in invoke_config:
-            self._thread_counter += 1
-            invoke_config = {"configurable": {"thread_id": f"thread_{self._thread_counter}"}}
+    def invoke(self, inputs: Dict[str, Any], config: Dict[str, Any] = None, session_id: str = "") -> Dict[str, Any]:
+        """Sync invoke — used by tests. Web app uses ainvoke()."""
+        result = self.workflow.invoke(
+            self._build_inputs(inputs.get("input", "")),
+            self._build_config(config, session_id),
+        )
+        return _extract_output(result)
 
-        async for event in self.workflow.astream_events(workflow_inputs, invoke_config, version="v2"):
+    async def ainvoke(self, inputs: Dict[str, Any], config: Dict[str, Any] = None, session_id: str = "") -> Dict[str, Any]:
+        """Async invoke — used by web_app.py endpoints."""
+        result = await self.workflow.ainvoke(
+            self._build_inputs(inputs.get("input", "")),
+            self._build_config(config, session_id),
+        )
+        return _extract_output(result)
+
+    async def astream(self, inputs: Dict[str, Any], config: Dict[str, Any] = None, session_id: str = ""):
+        """Async stream the workflow's execution."""
+        invoke_config = self._build_config(config, session_id)
+
+        async for event in self.workflow.astream_events(
+            self._build_inputs(inputs.get("input", "")), invoke_config, version="v2"
+        ):
             kind = event.get("event", "")
 
             if kind == "on_tool_start":
@@ -396,9 +392,9 @@ class CustomWorkflowWrapper:
                         yield {"output": output.content}
 
 
-def create_custom_workflow_executor(use_memory: bool = False) -> CustomWorkflowWrapper:
-    """Create an AgentExecutor-compatible wrapper for the custom workflow."""
-    return CustomWorkflowWrapper(use_memory=use_memory)
+def create_custom_workflow_executor(checkpointer=None) -> CustomWorkflowWrapper:
+    """Create a CustomWorkflowWrapper with an optional persistent checkpointer."""
+    return CustomWorkflowWrapper(checkpointer=checkpointer)
 
 
 # -------------------------------------------------------------------
