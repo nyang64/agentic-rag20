@@ -5,24 +5,32 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "scraper"
 version = "0.1.0"
-description = "Agentic RAG with Microsoft AutoGen agent and pgvector knowledge base"
+description = "Agentic RAG with Microsoft Agent Framework (MAF) and pgvector knowledge base"
 authors = [{ name="Nanchang Yang" }]
 requires-python = ">=3.12"
 dependencies = [
-    "fastapi",
-    "uvicorn",
-    "autogen-agentchat==0.7.5",
-    "autogen-ext[openai]==0.7.5",
+    "fastapi==0.120.4",
+    "uvicorn==0.38.0",
+    "starlette==0.49.1",
+    "python-multipart==0.0.20",
+    "agent-framework-core==1.9.0",
+    "agent-framework-openai==1.8.2",
     "sentence-transformers==5.1.2",
     "torch==2.2.2",
     "transformers==4.57.1",
+    "tokenizers==0.22.2",
     "safetensors==0.6.2",
+    "huggingface-hub==0.36.0",
     "psycopg2-binary==2.9.11",
     "pgvector==0.3.6",
-    "beautifulsoup4",
-    "requests",
+    "beautifulsoup4==4.14.2",
+    "requests==2.32.5",
+    "lxml==6.0.2",
     "ddgs>=9.14.2",
-    "python-dotenv",
+    "python-dotenv==1.2.1",
+    "pydantic==2.12.3",
+    "httpx==0.28.1",
+    "anyio==4.11.0",
     "langchain-core==1.4.8",
     "langsmith==0.4.39",
     "ragas==0.4.3",

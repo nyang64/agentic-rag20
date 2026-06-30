@@ -1,26 +1,28 @@
 """
-scraper/ms_agent.py - Microsoft AutoGen ReAct agent for Agentic RAG
+scraper/ms_maf_agent.py - Microsoft Agent Framework (MAF) agent for Agentic RAG
 
-AutoGen concepts used here:
-  AssistantAgent          - LLM-backed agent; runs a ReAct loop internally
-  OpenAIChatCompletionClient - OpenAI-compatible model client (works with OpenRouter)
-  Tools                   - plain async Python functions registered on the agent
+MAF concepts used here:
+  Agent                      - LLM-backed agent; handles tool-calling loop internally
+  OpenAIChatCompletionClient - OpenAI Chat Completions client (works with OpenRouter)
+  @tool                      - decorator that registers a Python function as an agent tool
+  AgentResponse              - result of agent.run(); use .text for the final answer
+  ResponseStream             - async iterable of AgentResponseUpdate for streaming
 
-The agent calls tools in a loop until it has enough information, then produces
-a final response.  A fresh agent is created per request (stateless).
+Why OpenAIChatCompletionClient (not OpenAIChatClient):
+  OpenAIChatClient uses the OpenAI Responses API which is not yet supported by
+  OpenRouter. OpenAIChatCompletionClient uses the Chat Completions API which is
+  OpenAI-compatible and works with any OpenRouter model.
 
-AutoGen version: autogen-agentchat 0.7.x
+MAF package: agent-framework-core + agent-framework-openai
 """
 
 import os
 import asyncio
-from typing import Dict, Any, List
+from typing import Dict, Any
 from dotenv import load_dotenv
 
-from autogen_agentchat.agents import AssistantAgent
-from autogen_agentchat.base import TaskResult
-from autogen_agentchat.messages import TextMessage
-from autogen_ext.models.openai import OpenAIChatCompletionClient
+from agent_framework import Agent, tool
+from agent_framework_openai import OpenAIChatCompletionClient
 
 load_dotenv()
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
@@ -43,14 +45,16 @@ After your main answer, add a Sources section listing URLs used."""
 
 
 # ---------------------------------------------------------------------------
-# Tool implementations (async — AutoGen's executor calls these directly)
+# Tools — decorated with @tool so MAF infers the JSON schema from the
+# function signature and docstring automatically.
 # ---------------------------------------------------------------------------
 
+@tool
 async def web_search(query: str) -> str:
     """Search the web for current information using DuckDuckGo.
 
-    Automatically fetches the top result's page content so the caller gets
-    real data, not just a list of URLs to follow up on.
+    Automatically fetches the top result's page content so the agent
+    receives actual data, not just a list of URLs.
     """
     try:
         import requests
@@ -63,7 +67,6 @@ async def web_search(query: str) -> str:
             if not hits:
                 return "No search results found."
 
-            # Snippets for all results
             snippets = []
             for r in hits:
                 snippets.append(
@@ -72,7 +75,7 @@ async def web_search(query: str) -> str:
                     f"URL: {r.get('href', '')}\n"
                 )
 
-            # Auto-fetch top result so the LLM gets actual page content
+            # Auto-fetch top result for actual page content
             top_url = hits[0].get("href", "")
             fetched = ""
             if top_url:
@@ -84,7 +87,7 @@ async def web_search(query: str) -> str:
                         el.decompose()
                     fetched = soup.get_text(" ", strip=True)[:2000]
                 except Exception:
-                    pass  # fall back to snippets only
+                    pass
 
             result = "Search Results:\n" + "\n".join(snippets)
             if fetched:
@@ -97,6 +100,7 @@ async def web_search(query: str) -> str:
         return f"Error searching web: {str(e)}"
 
 
+@tool
 async def fetch_webpage(url: str) -> str:
     """Fetch the full text content of a specific webpage given its URL."""
     try:
@@ -117,6 +121,7 @@ async def fetch_webpage(url: str) -> str:
         return f"Error fetching {url}: {str(e)}"
 
 
+@tool
 async def search_local_knowledge(query: str) -> str:
     """Search the local pgvector knowledge base for domain-specific content."""
     try:
@@ -143,33 +148,22 @@ async def search_local_knowledge(query: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Model client and agent factory
-# model_info is required for OpenRouter models — they aren't in AutoGen's
-# built-in registry, so AutoGen can't infer capabilities without it.
+# Client and agent factory — fresh agent per request (stateless)
 # ---------------------------------------------------------------------------
 
-def _build_model_client() -> OpenAIChatCompletionClient:
-    model = os.getenv("OPENAI_FREE_MODEL", "openai/gpt-oss-20b:free")
+def _build_client() -> OpenAIChatCompletionClient:
     return OpenAIChatCompletionClient(
-        model=model,
+        model=os.getenv("OPENAI_FREE_MODEL", "openai/gpt-oss-20b:free"),
         api_key=os.getenv("OPENROUTER_API_KEY"),
         base_url="https://openrouter.ai/api/v1",
-        model_info={
-            "vision": False,
-            "function_calling": True,
-            "json_output": False,
-            "family": "unknown",
-        },
     )
 
 
-def _build_agent() -> AssistantAgent:
-    return AssistantAgent(
-        name="research_assistant",
-        model_client=_build_model_client(),
+def _build_agent() -> Agent:
+    return Agent(
+        client=_build_client(),
+        instructions=SYSTEM_PROMPT,
         tools=[web_search, fetch_webpage, search_local_knowledge],
-        system_message=SYSTEM_PROMPT,
-        reflect_on_tool_use=True,  # generate a coherent final response after tools finish
     )
 
 
@@ -178,67 +172,26 @@ def _build_agent() -> AssistantAgent:
 # ---------------------------------------------------------------------------
 
 async def aquery_agent(question: str) -> Dict[str, Any]:
-    """Run the agent to completion and return the final answer."""
+    """Run the MAF agent to completion and return the final answer."""
     agent = _build_agent()
-    result: TaskResult = await agent.run(task=question)
-
-    answer = ""
-    tools_used: List[str] = []
-
-    for msg in result.messages:
-        cls = type(msg).__name__
-        # TextMessage = final answer when reflect_on_tool_use generates a new LLM response
-        # ToolCallSummaryMessage = final answer when reflect_on_tool_use summarises tool output
-        # Both carry the synthesised answer as a plain string in .content
-        if cls in ("TextMessage", "ToolCallSummaryMessage") and getattr(msg, "source", "") not in ("user", ""):
-            if hasattr(msg, "content") and isinstance(msg.content, str):
-                answer = msg.content
-        # Track tool calls
-        if "ToolCallRequest" in cls and hasattr(msg, "content"):
-            for call in msg.content:
-                name = getattr(call, "name", "")
-                if name and name not in tools_used:
-                    tools_used.append(name)
-
-    # Last-resort fallback: use the final message whatever its type
-    if not answer and result.messages:
-        last = result.messages[-1]
-        if hasattr(last, "content") and isinstance(last.content, str):
-            answer = last.content
-
-    return {"answer": answer, "tools_used": tools_used}
+    response = await agent.run(question)
+    return {"answer": response.text or "", "tools_used": []}
 
 
 async def astream_agent_events(question: str):
     """
-    Async generator that yields human-readable strings as the agent runs.
-    Yields tool call notifications followed by the final answer.
+    Async generator that yields text chunks as the MAF agent runs.
 
-    Uses duck typing on class name so it stays robust across minor AutoGen
-    version changes (0.4 → 0.7 renamed several event classes).
+    MAF's ResponseStream is a plain AsyncIterable[AgentResponseUpdate].
+    Each update's .text property returns the text content of that chunk.
     """
     agent = _build_agent()
-
-    async for event in agent.run_stream(task=question):
-        cls = type(event).__name__
-
-        if "ToolCallRequest" in cls and hasattr(event, "content"):
-            for call in event.content:
-                name = getattr(call, "name", "unknown")
-                args = str(getattr(call, "arguments", ""))[:200]
-                yield f"[Tool: {name}] {args}\n"
-
-        elif "ToolCallExecution" in cls and hasattr(event, "content"):
-            for result in event.content:
-                preview = str(getattr(result, "content", result))[:300]
-                yield f"[Result]: {preview}...\n\n"
-
-        elif cls in ("TextMessage", "ToolCallSummaryMessage") and getattr(event, "source", "") not in ("user", ""):
-            if hasattr(event, "content") and isinstance(event.content, str):
-                yield f"\n{event.content}"
-
-        elif cls == "TaskResult":
-            break
+    # stream=True returns ResponseStream directly (not Awaitable) — no await here
+    stream = agent.run(question, stream=True)
+    async for update in stream:
+        text = update.text
+        if text:
+            yield text
 
 
 def query_agent(question: str) -> Dict[str, Any]:

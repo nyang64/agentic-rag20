@@ -15,12 +15,12 @@ from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
 
-from scraper.ms_agent import aquery_agent, astream_agent_events
+from scraper.ms_maf_agent import aquery_agent, astream_agent_events
 
 load_dotenv()
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
-app = FastAPI(title="Agentic RAG — AutoGen")
+app = FastAPI(title="Agentic RAG — Microsoft Agent Framework")
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 

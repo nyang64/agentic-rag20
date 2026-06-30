@@ -423,7 +423,7 @@ class TestIntegration:
     def test_ms_agent_local_knowledge(self, ragas_llm, ragas_embeddings):
         import asyncio
         from ragas.dataset_schema import SingleTurnSample, EvaluationDataset
-        from scraper.ms_agent import aquery_agent
+        from scraper.ms_maf_agent import aquery_agent
 
         question = "What should I know about visiting Haikou as a tourist?"
         agent_result = asyncio.run(aquery_agent(question))

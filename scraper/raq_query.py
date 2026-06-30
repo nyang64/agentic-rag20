@@ -1,4 +1,4 @@
-# raq_query.py  — ms-agent branch: LangChain-free pgvector retrieval
+# raq_query.py  — ms-maf branch: LangChain-free pgvector retrieval
 import os
 from dataclasses import dataclass, field
 from typing import List
