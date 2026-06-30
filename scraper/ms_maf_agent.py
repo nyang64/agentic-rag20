@@ -18,14 +18,109 @@ MAF package: agent-framework-core + agent-framework-openai
 
 import os
 import asyncio
-from typing import Dict, Any
+import json
+import psycopg2
+from typing import Dict, Any, List, Tuple
 from dotenv import load_dotenv
 
-from agent_framework import Agent, tool
+from agent_framework import Agent, Message, tool
 from agent_framework_openai import OpenAIChatCompletionClient
 
 load_dotenv()
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
+# ---------------------------------------------------------------------------
+# PostgreSQL conversation store
+# Schema: session_id | turns (JSONB [{role,content}]) | summary (TEXT)
+# ---------------------------------------------------------------------------
+
+_TABLE = "maf_chat_sessions"
+
+
+def create_sessions_table(db_url: str) -> None:
+    with psycopg2.connect(db_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(f"""
+                CREATE TABLE IF NOT EXISTS {_TABLE} (
+                    session_id TEXT PRIMARY KEY,
+                    turns      JSONB        NOT NULL DEFAULT '[]',
+                    summary    TEXT         NOT NULL DEFAULT '',
+                    updated_at TIMESTAMPTZ  DEFAULT NOW()
+                )
+            """)
+        conn.commit()
+
+
+def _load_session(db_url: str, session_id: str) -> Tuple[List[Dict], str]:
+    with psycopg2.connect(db_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(f"SELECT turns, summary FROM {_TABLE} WHERE session_id=%s", (session_id,))
+            row = cur.fetchone()
+    return (row[0], row[1]) if row else ([], "")
+
+
+def _save_session(db_url: str, session_id: str, turns: List[Dict], summary: str) -> None:
+    data = json.dumps(turns)
+    with psycopg2.connect(db_url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""INSERT INTO {_TABLE} (session_id, turns, summary, updated_at)
+                    VALUES (%s, %s::jsonb, %s, NOW())
+                    ON CONFLICT (session_id)
+                    DO UPDATE SET turns=%s::jsonb, summary=%s, updated_at=NOW()""",
+                (session_id, data, summary, data, summary),
+            )
+        conn.commit()
+
+
+def _summarize_turns(turns: List[Dict], existing_summary: str) -> str:
+    """Call the LLM to produce a rolling summary of the given turns."""
+    import litellm
+    transcript = "\n".join(
+        f"{'User' if t['role'] == 'user' else 'Assistant'}: {t['content'][:500]}"
+        for t in turns
+    )
+    if existing_summary:
+        prompt = (
+            f"Previous summary:\n{existing_summary}\n\n"
+            f"New conversation turns to incorporate:\n{transcript}\n\n"
+            "Update the summary to capture all important facts, names, and context. Be concise."
+        )
+    else:
+        prompt = (
+            f"Summarize this conversation, capturing all important facts, names, and context:\n\n"
+            f"{transcript}\n\nBe concise but complete."
+        )
+    model = os.getenv("OPENAI_FREE_MODEL", "openai/gpt-4o-mini")
+    response = litellm.completion(
+        model=f"openrouter/{model}",
+        messages=[{"role": "user", "content": prompt}],
+        api_key=os.getenv("OPENROUTER_API_KEY"),
+        max_tokens=500,
+    )
+    return response.choices[0].message.content
+
+
+def _maybe_summarize(turns: List[Dict], summary: str) -> Tuple[List[Dict], str]:
+    """Summarize all but the last user+assistant pair when turn count hits threshold."""
+    threshold = int(os.getenv("SUMMARIZE_AFTER_TURNS", "4"))
+    user_count = sum(1 for t in turns if t["role"] == "user")
+    if user_count < threshold:
+        return turns, summary
+    to_summarize = turns[:-2]
+    new_summary = _summarize_turns(to_summarize, summary)
+    return turns[-2:], new_summary
+
+
+def _build_messages(turns: List[Dict], summary: str, question: str) -> List[Message]:
+    """Build MAF Message list: optional summary system msg + history + current question."""
+    messages: List[Message] = []
+    if summary:
+        messages.append(Message("system", [f"Earlier conversation summary:\n{summary}"]))
+    for turn in turns:
+        messages.append(Message(turn["role"], [turn["content"]]))
+    messages.append(Message("user", [question]))
+    return messages
 
 
 def _setup_tracing() -> None:
@@ -229,47 +324,80 @@ def _get_tracer():
     return trace.get_tracer(__name__)
 
 
-async def aquery_agent(question: str) -> Dict[str, Any]:
+async def aquery_agent(question: str, session_id: str = "") -> Dict[str, Any]:
     """Run the MAF agent to completion and return the final answer."""
-    augmented = _augment_with_local(question) if _needs_local_search(question) else question
+    db_url = os.getenv("PGVECTOR_DB_URL", "")
+    turns, summary = [], ""
+    if session_id and db_url:
+        turns, summary = _load_session(db_url, session_id)
+
+    if _needs_local_search(question):
+        question = _augment_with_local(question)
+
+    messages = _build_messages(turns, summary, question)
+
     with _get_tracer().start_as_current_span("maf_agent") as span:
         span.set_attribute("openinference.span.kind", "AGENT")
         span.set_attribute("input.value", question)
         span.set_attribute("input.mime_type", "text/plain")
         agent = _build_agent()
-        response = await agent.run(augmented)
+        response = await agent.run(messages)
         answer = response.text or ""
         span.set_attribute("output.value", answer)
         span.set_attribute("output.mime_type", "text/plain")
+
+    if session_id and db_url:
+        turns.append({"role": "user", "content": question})
+        turns.append({"role": "assistant", "content": answer[:1000]})
+        turns, summary = _maybe_summarize(turns, summary)
+        _save_session(db_url, session_id, turns, summary)
+
     return {"answer": answer, "tools_used": []}
 
 
-async def astream_agent_events(question: str):
+async def astream_agent_events(question: str, session_id: str = ""):
     """Async generator yielding text chunks as the MAF agent runs."""
-    augmented = _augment_with_local(question) if _needs_local_search(question) else question
+    db_url = os.getenv("PGVECTOR_DB_URL", "")
+    turns, summary = [], ""
+    if session_id and db_url:
+        turns, summary = _load_session(db_url, session_id)
+
+    if _needs_local_search(question):
+        question = _augment_with_local(question)
+
+    messages = _build_messages(turns, summary, question)
+
     with _get_tracer().start_as_current_span("maf_agent") as span:
         span.set_attribute("openinference.span.kind", "AGENT")
         span.set_attribute("input.value", question)
         span.set_attribute("input.mime_type", "text/plain")
         agent = _build_agent()
-        stream = agent.run(augmented, stream=True)
+        stream = agent.run(messages, stream=True)
         answer_parts = []
         async for update in stream:
             text = update.text
             if text:
                 answer_parts.append(text)
                 yield text
-        span.set_attribute("output.value", "".join(answer_parts))
+        answer = "".join(answer_parts)
+        span.set_attribute("output.value", answer)
         span.set_attribute("output.mime_type", "text/plain")
 
+    if session_id and db_url:
+        turns.append({"role": "user", "content": question})
+        turns.append({"role": "assistant", "content": answer[:1000]})
+        turns, summary = _maybe_summarize(turns, summary)
+        _save_session(db_url, session_id, turns, summary)
 
-def query_agent(question: str) -> Dict[str, Any]:
+
+def query_agent(question: str, session_id: str = "") -> Dict[str, Any]:
     """Synchronous wrapper — used by integration tests."""
-    return asyncio.run(aquery_agent(question))
+    return asyncio.run(aquery_agent(question, session_id=session_id))
 
 
 __all__ = [
     "query_agent",
     "aquery_agent",
     "astream_agent_events",
+    "create_sessions_table",
 ]

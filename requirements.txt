@@ -40,6 +40,9 @@ scipy<1.14
 # ── OpenTelemetry (MAF native instrumentation → Phoenix) ──────
 opentelemetry-exporter-otlp-proto-http
 
+# ── Conversation summarization ────────────────────────────────
+litellm
+
 # ── Utilities ─────────────────────────────────────────────────
 python-dotenv==1.2.1
 pydantic==2.12.3
